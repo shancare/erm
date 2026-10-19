@@ -470,7 +470,12 @@ function tombolWaResep(jenis, id, pid) { return bisaKirimResep() ? html`<button 
 ACT['doc.resep'] = t => lihatPdf('Resep', 'dokumen.pdf', { jenis: 'resep', id: t.dataset.id }, tombolWaResep('resep', t.dataset.id, t.dataset.pid));
 ACT['doc.resepk'] = t => lihatPdf('Resep', 'resep.pdf', { resep_id: t.dataset.id }, tombolWaResep('resepk', t.dataset.id, t.dataset.pid));
 ACT['doc.resep.wa'] = t => { const p = pasienById(t.dataset.pid); if (!p) return toast('Data pasien tidak ditemukan.', 'err'); bagikanWa(t.dataset.jenis, t.dataset.id, p, {}); };
-ACT['doc.resume'] = t => lihatPdf('Resume Medis', 'dokumen.pdf', { jenis: 'resume', id: t.dataset.id });
+ACT['doc.resume'] = t => lihatPdf('Resume Medis', 'dokumen.pdf', { jenis: 'resume', id: t.dataset.id }, html`<button class="nx-btn secondary" data-act="resume.ulang" data-id="${t.dataset.id}"><i class="bi bi-arrow-repeat"></i> Buat ulang</button>`);
+/** Buat ulang PDF resume dengan data terbaru (mis. setelah petugas mengunggah tanda tangan). Nomor resume tetap sama. */
+ACT['resume.ulang'] = async t => {
+  const id = t.dataset.id;
+  try { await denganSibuk(t, () => call('resume.ulang', { soap_id: id })); toast('Resume dibuat ulang.'); MD.close('mdl2'); setTimeout(() => ACT['doc.resume']({ dataset: { id } }), 350); } catch (e) { galat(e); }
+};
 
 // \u2500\u2500 Beranda \u2500\u2500
 VIEWS.home = function (v) { return isKelola() ? berandaAdmin(v) : berandaLapangan(v); };
@@ -1211,6 +1216,7 @@ function sukses() {
   const r = V.hasil;
   put('#wizBody', html`<div class="nx-card accent text-center" style="padding:32px 20px"><div class="ill" style="width:72px;height:72px;margin:0 auto 14px;border-radius:50%;background:var(--ok-bg);color:var(--ok);display:grid;place-items:center;font-size:36px"><i class="bi bi-check-lg"></i></div>
     <div class="t-h2">${V.revisi ? 'Revisi tersimpan' : 'Kunjungan selesai'}</div><p class="muted mt8">Catatan SOAP ${V.p.nama} telah dikunci${r.resume ? ' dan resume medis dibuat (' + r.resume.no_resume + ')' : ''}.</p>
+    ${S.user && S.user.punya_ttd === false ? html`<div class="nx-alert warn mt16" style="text-align:left"><i class="bi bi-pen"></i><div>Tanda tangan Anda belum diunggah, sehingga resume tercetak tanpa TTD petugas. Unggah di menu Profil, lalu buka resume dan tekan <b>Buat ulang</b>.</div></div>` : ''}
     ${r.pdfGagal ? html`<div class="nx-alert warn mt16" style="text-align:left"><i class="bi bi-exclamation-triangle-fill"></i><div>Resume PDF belum berhasil dibuat. Catatan aman \u2014 buka kembali dari Kronologi SOAP untuk membuat ulang.</div></div>` : ''}
     ${r.invoice && isKelola() ? html`<div class="nx-note mt16" style="justify-content:center"><i class="bi bi-receipt"></i> ${r.invoice.paket ? 'Invoice paket ' + rp(r.invoice.total) + ' sudah terbit saat pendaftaran.' : 'Invoice draft ' + rp(r.invoice.total) + ' menunggu tinjauan.'}</div>` : ''}
     ${(r.stokRendah || []).length ? html`<div class="nx-alert warn mt16" style="text-align:left"><i class="bi bi-box-seam"></i><div>Stok BHP menipis/habis: <b>${r.stokRendah.join(', ')}</b>. Beri tahu admin untuk menambah stok.</div></div>` : ''}
