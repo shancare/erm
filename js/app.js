@@ -2087,10 +2087,14 @@ ACT['kl.beli'] = () => formBeliBhp('');
 ACT['bhp.beliForm'] = t => formBeliBhp(t.dataset.id);
 async function formBeliBhp(id) {
   let md; try { md = await call('master.semua', {}, { fresh: 30000 }); } catch (e) { return galat(e); }
-  const l = md.bhp.filter(x => x.aktif); if (!l.length) return toast('Belum ada BHP aktif. Tambahkan dulu di Master Data.', 'warn');
-  const x0 = l.find(b => b.bhp_id === id) || l[0]; KL_NOTA.data = ''; KL_NOTA.hapus = false; KL.bhpList = l;
+  const l = md.bhp.filter(x => x.aktif);
+  const x0 = l.find(b => b.bhp_id === id) || l[0] || { bhp_id: '__baru', harga_beli: '' }; KL_NOTA.data = ''; KL_NOTA.hapus = false; KL.bhpList = l; KL.persenDefault = Number(md.config && md.config.persen_jual_bhp) || 20;
   MD.open('mdl', { title: 'Beli BHP', size: 'sm', body: html`
-    <div class="nx-field"><label class="nx-lab" for="blB"><span>BHP <span class="req">*</span></span></label><select id="blB" class="nx-sel" data-ch="kl.blPilih">${l.map(b => html`<option value="${b.bhp_id}" ${b.bhp_id === x0.bhp_id ? 'selected' : ''}>${b.nama} (stok ${b.stok} ${b.satuan})</option>`)}</select></div>
+    <div class="nx-field"><label class="nx-lab" for="blB"><span>BHP <span class="req">*</span></span></label><select id="blB" class="nx-sel" data-ch="kl.blPilih">${l.map(b => html`<option value="${b.bhp_id}" ${b.bhp_id === x0.bhp_id ? 'selected' : ''}>${b.nama} (stok ${b.stok} ${b.satuan})</option>`)}<option value="__baru" ${x0.bhp_id === '__baru' ? 'selected' : ''}>\uff0b BHP baru (belum ada di daftar)</option></select></div>
+    <div id="blBaru" class="mb12" ${x0.bhp_id === '__baru' ? '' : 'hidden'}>
+      <div class="nx-grid2" style="gap:0 16px">${medan('blNm', 'Nama BHP baru', { req: 1, max: 100, ph: 'mis. Sarung tangan steril' })}${medan('blSat', 'Satuan', { req: 1, max: 20, ph: 'box / pcs / lembar' })}</div>
+      <div class="nx-grid2" style="gap:0 16px">${medan('blMin', 'Batas stok minimum', { opt: 1, inputmode: 'numeric', ph: '0' })}${medan('blPs', 'Persen jual (%)', { opt: 1, inputmode: 'numeric', ph: 'ikut default klinik' })}</div>
+    </div>
     <div class="nx-grid2" style="gap:0 16px">${medan('blQty', 'Jumlah beli', { inputmode: 'numeric', req: 1, v: '' })}${medan('blHrg', 'Harga beli / satuan (Rp)', { inputmode: 'numeric', req: 1, v: x0.harga_beli || '' })}</div>
     <div class="nx-alert info mb12" id="blPrev"><i class="bi bi-calculator"></i><div></div></div>
     <div class="nx-grid2" style="gap:0 16px">${medan('blTgl', 'Tanggal', { type: 'date', v: today(), req: 1 })}
@@ -2100,21 +2104,24 @@ async function formBeliBhp(id) {
     footer: html`<button class="nx-btn secondary" data-bs-dismiss="modal">Batal</button><button class="nx-btn primary" data-act="kl.beliSimpan"><i class="bi bi-check2"></i> Simpan Pembelian</button>`,
     onShown: () => { const e = $('#blTgl'); if (e) e.max = today(); ['blQty', 'blHrg'].forEach(i => $('#' + i).addEventListener('input', prevBeli)); prevBeli(); } });
 }
-INP['kl.blPilih'] = el => { const b = (KL.bhpList || []).find(x => x.bhp_id === el.value); if (b && b.harga_beli) $('#blHrg').value = b.harga_beli; prevBeli(); };
+INP['kl.blPilih'] = el => { const baru = el.value === '__baru'; const bx = $('#blBaru'); if (bx) bx.hidden = !baru; const b = (KL.bhpList || []).find(x => x.bhp_id === el.value); if (baru) $('#blHrg').value = ''; else if (b && b.harga_beli) $('#blHrg').value = b.harga_beli; prevBeli(); };
 function prevBeli() {
-  const box = $('#blPrev'); if (!box) return; const b = (KL.bhpList || []).find(x => x.bhp_id === val('blB')); if (!b) return;
+  const box = $('#blPrev'); if (!box) return; const baru = val('blB') === '__baru'; const b = baru ? { persen_efektif: (uang(val('blPs')) || (KL.persenDefault || 0)) } : (KL.bhpList || []).find(x => x.bhp_id === val('blB')); if (!b) return;
   const q = uang(val('blQty')), h = uang(val('blHrg')), ps = b.persen_efektif;
   const jual = h > 0 ? Math.max(500, Math.round(h * (1 + ps / 100) / 500) * 500) : 0;
   box.lastElementChild.innerHTML = 'Total pengeluaran: <b>' + rp(q * h) + '</b>' + (h > 0 ? '<br>Harga jual ke pasien menjadi <b>' + rp(jual) + '</b> (+' + ps + '%) \u2014 berlaku untuk pemakaian berikutnya.' : '');
 }
 ACT['kl.beliSimpan'] = async btn => {
   bersihGalat($('#mdl'));
-  const d = { bhp_id: val('blB'), qty: uang(val('blQty')), harga_satuan: uang(val('blHrg')), tanggal: val('blTgl'), metode: val('blMet'), pemasok: val('blPem') };
-  let ok = true; if (d.qty < 1) ok = bad('blQty', 'Isi jumlah beli.'); if (d.harga_satuan < 1) ok = bad('blHrg', 'Isi harga beli.'); if (!d.tanggal || d.tanggal > today()) ok = bad('blTgl', 'Tanggal tidak valid.'); if (!ok) return;
+  const baru = val('blB') === '__baru';
+  const d = { bhp_id: baru ? '' : val('blB'), qty: uang(val('blQty')), harga_satuan: uang(val('blHrg')), tanggal: val('blTgl'), metode: val('blMet'), pemasok: val('blPem') };
+  let ok = true; if (d.qty < 1) ok = bad('blQty', 'Isi jumlah beli.'); if (d.harga_satuan < 1) ok = bad('blHrg', 'Isi harga beli.'); if (!d.tanggal || d.tanggal > today()) ok = bad('blTgl', 'Tanggal tidak valid.');
+  if (baru) { d.bhp_baru = { nama: val('blNm').trim(), satuan: val('blSat').trim(), stok_min: uang(val('blMin')), persen_jual: val('blPs').trim() === '' ? '' : uang(val('blPs')) }; if (d.bhp_baru.nama.length < 3) ok = bad('blNm', 'Nama minimal 3 karakter.'); if (!d.bhp_baru.satuan) ok = bad('blSat', 'Isi satuan.'); }
+  if (!ok) return;
   if (KL_NOTA.data) d.nota = KL_NOTA.data;
   try {
     const r = await denganSibuk(btn, () => call('bhp.beli', d)); MD.close('mdl'); KL.d = null;
-    if (typeof M !== 'undefined' && M.d && M.d.bhp) { const i = M.d.bhp.findIndex(x => x.bhp_id === r.bhp.bhp_id); if (i >= 0) M.d.bhp[i] = r.bhp; segarkanLokal(); }
+    if (typeof M !== 'undefined' && M.d && M.d.bhp) { const i = M.d.bhp.findIndex(x => x.bhp_id === r.bhp.bhp_id); if (i >= 0) M.d.bhp[i] = r.bhp; else M.d.bhp.push(r.bhp); segarkanLokal(); }
     toast('Tercatat: stok ' + r.bhp.nama + ' kini ' + r.bhp.stok + ', harga jual ' + rp(r.bhp.harga_jual) + '.');
     if (S.route === '/keluar') muatKeluar(); else if (S.route === '/master') { M.d = null; try { M.d = await call('master.semua', {}, { fresh: 1 }); gambarMaster(); } catch (e) { /* abaikan */ } }
   } catch (e) { galat(e); }
