@@ -92,15 +92,17 @@ function syncPill() {
 // \u2500\u2500 Pemanggil API (satu gerbang: fetch POST ke Apps Script Web App) \u2500\u2500
 const GAS_URL = (window.NX_CONFIG && window.NX_CONFIG.GAS_URL) || '';
 // Aksi BACA murni (aman di-retry & di-cache sebentar). Aksi lain dianggap tulis \u2192 cache dibuang, dikirim dengan reqId (idempoten).
-const AKSI_BACA = /^(bootstrap|dash|laporan|master\.semua|invoice\.(daftar|detail)|audit\.daftar|bhp\.log|pasien\.rekam|kons\.daftar|kp\.poll)$/;
+const AKSI_BACA = /^(bootstrap|dash|laporan|master\.semua|invoice\.(daftar|detail)|audit\.daftar|bhp\.log|pasien\.rekam|kons\.daftar|kp\.poll|jadwal\.daftar|keluar\.daftar|keuangan)$/;
 const MEMC = {};                       // cache di memori saja (tidak disimpan ke disk: data pasien tidak boleh tertinggal di perangkat)
 const uuid = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12) + '-' + Math.random().toString(36).slice(2, 8));
 const tunda = ms => new Promise(r => setTimeout(r, ms));
-function bersihkanCache() { Object.keys(MEMC).forEach(k => delete MEMC[k]); }
+let CACHE_V = 0;                      // naik setiap cache dibuang \u2192 hasil refresh latar yang lahir sebelum penulisan tidak boleh masuk cache
+function bersihkanCache() { CACHE_V++; Object.keys(MEMC).forEach(k => delete MEMC[k]); }
+const APP_VER = '2.8.6';
 /** Pemanasan: bangunkan Apps Script selagi pengguna mengetik/membaca, supaya panggilan nyata tidak menanggung cold start. */
 function pemanasan() { if (!GAS_URL || /GANTI/.test(GAS_URL)) return; try { fetch(GAS_URL + (GAS_URL.indexOf('?') < 0 ? '?' : '&') + 'ping=' + Date.now(), { mode: 'no-cors', cache: 'no-store' }).catch(() => {}); } catch (e) { /* abaikan */ } }
 /** Pengukur performa: di console ketik Perf.table() — 'net' besar & 'server' kecil = jaringan/cold start; 'server' besar = Sheets/tulis. */
-const Perf = { rows: [], add(aksi, total, server) { this.rows.push({ aksi, total, server: server == null ? null : server, net: server == null ? null : total - server }); if (this.rows.length > 200) this.rows.shift(); }, table() { console.table(this.rows.slice(-30)); } };
+const Perf = { rows: [], add(aksi, total, server, bytes) { this.rows.push({ aksi, total, server: server == null ? null : server, net: server == null ? null : total - server, kb: bytes == null ? null : Math.round(bytes / 102.4) / 10 }); if (this.rows.length > 200) this.rows.shift(); }, table() { console.table(this.rows.slice(-30)); } };
 window.Perf = Perf;
 /** Pustaka berat dimuat HANYA saat dibutuhkan (Chart.js untuk grafik, SheetJS untuk ekspor Excel). */
 const LIB_URL = { chart: 'https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js', xlsx: 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js' };
@@ -122,7 +124,7 @@ async function kirimSekali(aksi, payload, timeoutMs, reqId) {
     // text/plain WAJIB: JSON biasa memicu preflight CORS yang tidak didukung Apps Script
     const r = await fetch(GAS_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ token: S.token || null, aksi: aksi, payload: payload || {}, reqId: reqId || '' }), redirect: 'follow', signal: ctl ? ctl.signal : undefined });
     const t = await r.text();
-    try { const j = JSON.parse(t); Perf.add(aksi, Math.round(performance.now() - t0), j && j.ms); return { j: j }; } catch (e) { return { err: 'Server tidak membalas dengan benar. Pastikan deployment Apps Script diatur "Siapa saja" dan versi terbaru.', ulang: r.status >= 500 || r.status === 429 || !t }; }
+    try { const j = JSON.parse(t); Perf.add(aksi, Math.round(performance.now() - t0), j && j.ms, t.length); return { j: j }; } catch (e) { return { err: 'Server tidak membalas dengan benar. Pastikan deployment Apps Script diatur "Siapa saja" dan versi terbaru.', ulang: r.status >= 500 || r.status === 429 || !t }; }
   } catch (e) { return { err: null, ulang: true, detail: e }; }
   finally { clearTimeout(tm); }
 }
@@ -137,11 +139,30 @@ async function ambil(aksi, payload) {
   }
   return hasil;
 }
-/** call(aksi, payload, {fresh: ms}) \u2014 fresh: pakai hasil di memori bila masih segar (hanya aksi baca). */
+const SEGAR = {};
+function segarkanDiam(aksi, payload, ck, opt) {
+  if (SEGAR[ck] || !GAS_URL || /GANTI/.test(GAS_URL)) return;
+  SEGAR[ck] = 1; const v0 = CACHE_V;
+  ambil(aksi, payload).then(h => {
+    const r = h && h.j; if (!r) return;
+    if (r.success) {
+      const d = JSON.stringify(r.data === undefined ? null : r.data);
+      if (v0 !== CACHE_V) return;                      // ada penulisan selagi menunggu \u2192 buang hasil ini
+      const beda = !MEMC[ck] || MEMC[ck].d !== d; MEMC[ck] = { t: Date.now(), d };
+      if (beda && opt.baru) { try { opt.baru(r.data); } catch (e) { /* abaikan */ } }
+    } else if (r.code === 'AUTH') paksaKeluar(r.message);
+  }).finally(() => { delete SEGAR[ck]; });
+}
+/** call(aksi, payload, {fresh: ms, stale: ms, baru: fn}) \u2014 fresh: pakai hasil di memori bila masih segar (hanya aksi baca). */
 function call(aksi, payload, opt) {
   return new Promise((res, rej) => {
     const baca = AKSI_BACA.test(aksi), ck = baca && opt && opt.fresh ? aksi + '|' + JSON.stringify(payload || {}) : '';
-    if (ck && MEMC[ck] && Date.now() - MEMC[ck].t < opt.fresh) return res(JSON.parse(MEMC[ck].d));
+    if (ck && MEMC[ck]) {
+      const umur = Date.now() - MEMC[ck].t;
+      if (umur < opt.fresh) return res(JSON.parse(MEMC[ck].d));
+      // Data lama masih boleh ditampilkan SEKARANG; versi segar diambil diam-diam dan dikabarkan lewat opt.baru bila berubah.
+      if (opt.stale && umur < opt.stale) { res(JSON.parse(MEMC[ck].d)); segarkanDiam(aksi, payload, ck, opt); return; }
+    }
     prog(1);
     const ok = r => {
       prog(-1);
@@ -357,6 +378,18 @@ async function keluar() {
 ACT['app.keluar'] = async () => { if (await konfirmasi({ title: 'Keluar', msg: 'Keluar dari ShanERM? Draft lokal pada perangkat ini akan dihapus.', ok: 'Keluar' })) keluar(); };
 
 // \u2500\u2500 Bootstrap: satu panggilan berisi seluruh data awal \u2500\u2500
+/** Isi cache layar berat selagi pengguna masih di beranda, satu per satu agar tidak membebani server. */
+async function isiAwal() {
+  if (!S.ready || document.hidden) return;
+  const kerja = [];
+  if (S.user && (S.user.peran === 'SUPERADMIN' || S.user.peran === 'ADMIN')) kerja.push(['invoice.daftar', { dari: addDays(today(), -T.hari) }, 20000]);
+  if (S.user && S.user.peran === 'SUPERADMIN') {
+    kerja.unshift(['master.semua', {}, 30000]);
+    if (!L.dari) setPreset('bulan');
+    kerja.push(['keuangan', { dari: L.dari, sampai: L.sampai, grain: L.grain }, 30000]);
+  }
+  for (const k of kerja) { if (!S.ready) return; try { await call(k[0], k[1], { fresh: k[2], stale: 600000 }); } catch (e) { /* senyap */ } await tunda(400); }
+}
 async function mulaiApp(dataAwal) {
   const d = dataAwal || await call('bootstrap');
   S.user = d.user; S.cfg = d.config; S.staff = d.staff; S.tarif = d.tarif; S.bhp = d.bhp; S.paket = d.paket || []; S.pasien = d.pasien; S.jadwal = d.jadwal; S.hariIni = d.hariIni;
@@ -367,7 +400,7 @@ async function mulaiApp(dataAwal) {
   gambarShell();
   const awal = (location.hash || '').replace(/^#/, '');
   S.route = awal && awal.indexOf('/') === 0 ? awal : '/home';
-  render(); pasangBadgeKonsul();
+  render(); pasangBadgeKonsul(); setTimeout(isiAwal, 2500);
   if (d.user.wajibGanti) setTimeout(formGantiPw, 300, true);
 }
 
@@ -536,13 +569,23 @@ function berandaAdmin(v) {
   }).catch(() => put('#insBox', html`<h6><i class="bi bi-stars"></i> Insight</h6><div class="t-sm">Tidak dapat memuat insight.</div>`));
 }
 
+/** Diagnostik kecepatan (Superadmin): total = yang dirasakan pengguna, server = waktu kerja Apps Script, jaringan = sisanya (cold start/unduh), KB = ukuran jawaban. */
+ACT['perf.lihat'] = () => {
+  const g = {}; Perf.rows.forEach(r => { const x = g[r.aksi] = g[r.aksi] || { n: 0, tot: 0, mak: 0, srv: 0, ns: 0, kb: 0, nk: 0 }; x.n++; x.tot += r.total; x.mak = Math.max(x.mak, r.total); if (r.server != null) { x.srv += r.server; x.ns++; } if (r.kb != null) { x.kb += r.kb; x.nk++; } });
+  const det = ms => (ms / 1000).toFixed(1) + ' dtk';
+  const baris = Object.keys(g).sort((p, q) => g[q].mak - g[p].mak).map(k => { const x = g[k]; return html`<tr><td>${k}</td><td>${x.n}</td><td>${det(x.tot / x.n)}</td><td>${det(x.mak)}</td><td>${x.ns ? det(x.srv / x.ns) : '-'}</td><td>${x.nk ? (x.kb / x.nk).toFixed(0) : '-'}</td></tr>`; });
+  MD.open('mdl', { title: 'Kecepatan aplikasi', size: 'lg', body: html`<p class="muted t-sm">Sejak halaman dibuka. <b>Rata\u00b2/Maks</b> = waktu yang Anda rasakan; <b>Server</b> = waktu kerja Apps Script; selisihnya = jaringan/cold start. <b>KB</b> = ukuran jawaban. Screenshot tabel ini jika ada layar yang lambat.</p>
+    <div style="overflow-x:auto"><table class="nx-tbl"><thead><tr><th>Aksi</th><th>Kali</th><th>Rata\u00b2</th><th>Maks</th><th>Server</th><th>KB</th></tr></thead><tbody>${baris.length ? baris : html`<tr><td colspan="6" class="muted">Belum ada data.</td></tr>`}</tbody></table></div>`,
+    footer: html`<button class="nx-btn secondary" data-bs-dismiss="modal">Tutup</button>` });
+};
+
 // \u2500\u2500 Profil & ganti password \u2500\u2500
 VIEWS.profil = function (v) {
   const u = S.user, tema = document.documentElement.getAttribute('data-theme');
   put(v, html`<div class="nx-page-h"><div><h1 class="t-h1">Profil Saya</h1></div></div>
   <div class="nx-grid2"><div class="nx-card accent"><div class="nx-pt mb16"><div class="nx-ava lg">${inisial(u.nama)}</div><div><div class="t-h3">${u.nama}</div><div class="nx-badge info nodot mt8">${peranLabel(u)}</div></div></div>
-    <dl class="nx-kv"><dt>Username</dt><dd>${u.username}</dd>${u.jabatan ? html`<dt>Jabatan</dt><dd>${u.jabatan}</dd>` : ''}${u.no_sip ? html`<dt>No. SIP</dt><dd>${u.no_sip}</dd>` : ''}${u.no_str ? html`<dt>No. STR</dt><dd>${u.no_str}</dd>` : ''}<dt>Klinik</dt><dd>${S.cfg.nama_klinik}</dd><dt>Versi</dt><dd>ShanERM 2.7</dd></dl>
-    <div class="wrap-gap mt24"><button class="nx-btn secondary" data-act="pw.form"><i class="bi bi-key"></i> Ganti Password</button><button class="nx-btn danger" data-act="app.keluar"><i class="bi bi-box-arrow-right"></i> Keluar</button></div></div>
+    <dl class="nx-kv"><dt>Username</dt><dd>${u.username}</dd>${u.jabatan ? html`<dt>Jabatan</dt><dd>${u.jabatan}</dd>` : ''}${u.no_sip ? html`<dt>No. SIP</dt><dd>${u.no_sip}</dd>` : ''}${u.no_str ? html`<dt>No. STR</dt><dd>${u.no_str}</dd>` : ''}<dt>Klinik</dt><dd>${S.cfg.nama_klinik}</dd><dt>Versi</dt><dd>ShanERM ${APP_VER}</dd></dl>
+    <div class="wrap-gap mt24"><button class="nx-btn secondary" data-act="pw.form"><i class="bi bi-key"></i> Ganti Password</button>${isSuper() ? html`<button class="nx-btn secondary" data-act="perf.lihat"><i class="bi bi-speedometer2"></i> Kecepatan</button>` : ''}<button class="nx-btn danger" data-act="app.keluar"><i class="bi bi-box-arrow-right"></i> Keluar</button></div></div>
     <div class="nx-card"><div class="nx-sec-title mb16"><i class="bi bi-pen"></i> Tanda Tangan Saya</div>
       <div class="nx-ttd-prev" id="ttdPrev">${skel(1, 70)}</div>
       <div class="nx-note mt12"><i class="bi bi-info-circle"></i> Ditempel otomatis pada dokumen yang Anda terbitkan (resume medis, resep). Tersimpan privat; hanya Anda yang dapat mengubahnya.</div>
@@ -1233,7 +1276,7 @@ const kelompokInv = i => i.status_terbit === 'BATAL' ? 'BATAL' : (i.status_terbi
 VIEWS.tagihan = async function (v) {
   put(v, html`<div class="nx-page-h"><div><h1 class="t-h1">Tagihan & Invoice</h1><p>Tinjau draft otomatis dari SOAP, terbitkan, catat pembayaran, kirim via WhatsApp.</p></div><button class="nx-btn secondary" data-act="inv.excel"><i class="bi bi-file-earmark-excel"></i> Rekap Excel</button></div><div id="invBody">${skel(3, 80)}</div>`);
   try {
-    T.list = await call('invoice.daftar', { dari: addDays(today(), -T.hari) }, { fresh: 20000 }); if (S.route !== '/tagihan') return;
+    T.list = await call('invoice.daftar', { dari: addDays(today(), -T.hari) }, { fresh: 20000, stale: 600000, baru: l => { if (S.route !== '/tagihan') return; T.list = l; S.dashDraft = l.filter(i => i.status_terbit === 'DRAFT').length; hitungBadge(); gambarInvList(); } }); if (S.route !== '/tagihan') return;
     S.dashDraft = T.list.filter(i => i.status_terbit === 'DRAFT').length; hitungBadge(); gambarInvList();
     if (T.sel) { const id = T.sel; T.sel = ''; bukaInv(id); }
   } catch (e) { galat(e); put('#invBody', kosong('bi-wifi-off', 'Gagal memuat tagihan', e.message)); }
@@ -1367,7 +1410,7 @@ const M = { tab: 'staf', d: null, q: '' };
 const TABS_M = [['staf', 'bi-people', 'Staf & Akun'], ['tarif', 'bi-tags', 'Tarif Layanan'], ['bhp', 'bi-box-seam', 'BHP & Stok'], ['paket', 'bi-box2-heart', 'Paket Tindakan'], ['klinik', 'bi-hospital', 'Klinik']];
 VIEWS.master = async function (v) {
   put(v, html`<div class="nx-page-h"><div><h1 class="t-h1">Master Data</h1><p>Staf, akun, tarif layanan, BHP, dan pengaturan klinik. Hanya Superadmin.</p></div></div><div id="mBody">${skel(3, 70)}</div>`);
-  try { M.d = await call('master.semua', {}, { fresh: 30000 }); if (S.route === '/master') gambarMaster(); } catch (e) { galat(e); put('#mBody', kosong('bi-wifi-off', 'Gagal memuat', e.message)); }
+  try { M.d = await call('master.semua', {}, { fresh: 30000, stale: 900000, baru: d => { M.d = d; if (S.route === '/master') gambarMaster(); } }); if (S.route === '/master') gambarMaster(); } catch (e) { galat(e); put('#mBody', kosong('bi-wifi-off', 'Gagal memuat', e.message)); }
 };
 function segarkanLokal() {
   S.staff = M.d.users.filter(u => u.status_aktif && ['DOKTER', 'PERAWAT', 'FISIO'].indexOf(u.peran) >= 0).map(u => ({ user_id: u.user_id, nama: u.nama, peran: u.peran, jabatan: u.jabatan, no_str: u.no_str, no_sip: u.no_sip, no_hp: u.no_hp }));
@@ -1504,7 +1547,7 @@ ACT['l.preset'] = t => { setPreset(t.dataset.v); render(true); };
 ACT['l.grain'] = t => { L.grain = t.dataset.v; render(true); };
 INP['l.tgl'] = () => { const a = val('lDari'), b = val('lSam'); if (a && b && a <= b) { L.dari = a; L.sampai = b; L.preset = ''; render(true); } else toast('Rentang tanggal tidak valid.', 'warn'); };
 async function muatLaporan() {
-  try { const r = await call('laporan', { dari: L.dari, sampai: L.sampai, grain: L.grain }, { fresh: 60000 }); if (S.route !== '/laporan') return; L.r = r; gambarLaporan(); } catch (e) { galat(e); put('#lBody', kosong('bi-wifi-off', 'Gagal memuat laporan', e.message)); }
+  try { const q = { dari: L.dari, sampai: L.sampai, grain: L.grain }; const r = await call('laporan', q, { fresh: 60000, stale: 600000, baru: x => { if (S.route === '/laporan' && L.tab === 'ops' && L.dari === q.dari && L.sampai === q.sampai && L.grain === q.grain) { L.r = x; gambarLaporan(); } } }); if (S.route !== '/laporan') return; L.r = r; gambarLaporan(); } catch (e) { galat(e); put('#lBody', kosong('bi-wifi-off', 'Gagal memuat laporan', e.message)); }
 }
 function specLaporan(r, w, tanpaLegenda) {
   const lab = r.deret.label.map(k => labelSeri(k, r.grain)), kosongSet = a => !a.some(x => x > 0);
@@ -2023,7 +2066,7 @@ VIEWS.keluar = function (v) {
   muatKeluar();
 };
 async function muatKeluar() {
-  try { KL.d = await call('keluar.daftar', { bulan: KL.bulan }, { fresh: 20000 }); if (S.route === '/keluar') gambarKeluar(); }
+  try { const bl = KL.bulan; KL.d = await call('keluar.daftar', { bulan: bl }, { fresh: 20000, stale: 600000, baru: d => { if (S.route === '/keluar' && KL.bulan === bl) { KL.d = d; gambarKeluar(); } } }); if (S.route === '/keluar') gambarKeluar(); }
   catch (e) { galat(e); put('#klBody', kosong('bi-wifi-off', 'Gagal memuat', e.message)); }
 }
 function gambarKeluar() {
@@ -2155,7 +2198,7 @@ ACT['k.preset'] = t => { setPresetKeu(t.dataset.v); render(true); };
 ACT['k.grain'] = t => { L.grain = t.dataset.v; render(true); };
 INP['k.tgl'] = () => { const a = val('lDari'), b = val('lSam'); if (a && b && a <= b) { L.dari = a; L.sampai = b; L.preset = ''; render(true); } else toast('Rentang tanggal tidak valid.', 'warn'); };
 async function muatKeuangan() {
-  try { const r = await call('keuangan', { dari: L.dari, sampai: L.sampai, grain: L.grain }, { fresh: 30000 }); if (S.route !== '/laporan' || L.tab === 'ops') return; KEU.r = r; gambarKeuangan(); } catch (e) { galat(e); put('#kBody', kosong('bi-wifi-off', 'Gagal memuat laporan', e.message)); }
+  try { const q = { dari: L.dari, sampai: L.sampai, grain: L.grain }; const r = await call('keuangan', q, { fresh: 30000, stale: 600000, baru: x => { if (S.route === '/laporan' && L.tab !== 'ops' && L.dari === q.dari && L.sampai === q.sampai && L.grain === q.grain) { KEU.r = x; gambarKeuangan(); } } }); if (S.route !== '/laporan' || L.tab === 'ops') return; KEU.r = r; gambarKeuangan(); } catch (e) { galat(e); put('#kBody', kosong('bi-wifi-off', 'Gagal memuat laporan', e.message)); }
 }
 const deltaKeu = (now, prev, naikBaik) => {
   if (!prev) return html`<span class="muted">periode sebelumnya: ${rp(prev || 0)}</span>`;
