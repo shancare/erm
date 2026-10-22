@@ -98,7 +98,7 @@ const uuid = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 
 const tunda = ms => new Promise(r => setTimeout(r, ms));
 let CACHE_V = 0;                      // naik setiap cache dibuang \u2192 hasil refresh latar yang lahir sebelum penulisan tidak boleh masuk cache
 function bersihkanCache() { CACHE_V++; Object.keys(MEMC).forEach(k => delete MEMC[k]); }
-const APP_VER = '2.8.6';
+const APP_VER = '2.8.7';
 /** Pemanasan: bangunkan Apps Script selagi pengguna mengetik/membaca, supaya panggilan nyata tidak menanggung cold start. */
 function pemanasan() { if (!GAS_URL || /GANTI/.test(GAS_URL)) return; try { fetch(GAS_URL + (GAS_URL.indexOf('?') < 0 ? '?' : '&') + 'ping=' + Date.now(), { mode: 'no-cors', cache: 'no-store' }).catch(() => {}); } catch (e) { /* abaikan */ } }
 /** Pengukur performa: di console ketik Perf.table() — 'net' besar & 'server' kecil = jaringan/cold start; 'server' besar = Sheets/tulis. */
@@ -124,11 +124,17 @@ async function kirimSekali(aksi, payload, timeoutMs, reqId) {
     // text/plain WAJIB: JSON biasa memicu preflight CORS yang tidak didukung Apps Script
     const r = await fetch(GAS_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ token: S.token || null, aksi: aksi, payload: payload || {}, reqId: reqId || '' }), redirect: 'follow', signal: ctl ? ctl.signal : undefined });
     const t = await r.text();
-    try { const j = JSON.parse(t); Perf.add(aksi, Math.round(performance.now() - t0), j && j.ms, t.length); return { j: j }; } catch (e) { return { err: 'Server tidak membalas dengan benar. Pastikan deployment Apps Script diatur "Siapa saja" dan versi terbaru.', ulang: r.status >= 500 || r.status === 429 || !t }; }
+    try { const j = JSON.parse(t); Perf.add(aksi, Math.round(performance.now() - t0), j && j.ms, t.length); return { j: j }; } catch (e) { const html = /^\s*</.test(t); return { err: html ? 'Server Google sedang sibuk. Coba lagi sesaat lagi.' : 'Server tidak membalas dengan benar. Pastikan deployment Apps Script diatur "Siapa saja" dan versi terbaru.', ulang: html || r.status >= 500 || r.status === 429 || !t }; }
   } catch (e) { return { err: null, ulang: true, detail: e }; }
   finally { clearTimeout(tm); }
 }
+let AKTIF = 0;                         // jumlah permintaan yang sedang berjalan
+/** Pekerjaan latar menunggu sampai tidak ada permintaan pengguna yang berjalan (maks ~6 dtk), supaya tidak menumpuk di Apps Script. */
+async function tungguSepi() { for (let i = 0; i < 20 && AKTIF > 0; i++) await tunda(300); }
 async function ambil(aksi, payload) {
+  AKTIF++; try { return await ambilInti(aksi, payload); } finally { AKTIF--; }
+}
+async function ambilInti(aksi, payload) {
   const baca = AKSI_BACA.test(aksi), reqId = baca ? '' : uuid();
   const coba = baca ? 3 : 2;           // tulis boleh diulang sekali karena membawa reqId yang sama
   let hasil;
@@ -143,7 +149,7 @@ const SEGAR = {};
 function segarkanDiam(aksi, payload, ck, opt) {
   if (SEGAR[ck] || !GAS_URL || /GANTI/.test(GAS_URL)) return;
   SEGAR[ck] = 1; const v0 = CACHE_V;
-  ambil(aksi, payload).then(h => {
+  tungguSepi().then(() => ambil(aksi, payload)).then(h => {
     const r = h && h.j; if (!r) return;
     if (r.success) {
       const d = JSON.stringify(r.data === undefined ? null : r.data);
@@ -183,6 +189,7 @@ function galat(e) { if (e && e.code === 'AUTH') return; toast(e && e.message ? e
 function toast(msg, tipe, ms) {
   const box = $('#toasts'); if (!box) return;
   tipe = tipe || 'ok';
+  for (const c of box.children) if (c.textContent === msg) return;   // pesan yang sama tidak ditumpuk
   const ic = { ok: 'bi-check-circle-fill', err: 'bi-exclamation-octagon-fill', warn: 'bi-exclamation-triangle-fill', info: 'bi-info-circle-fill' }[tipe] || 'bi-info-circle-fill';
   const el = document.createElement('div'); el.className = 'nx-toast ' + tipe; el.setAttribute('role', tipe === 'err' ? 'alert' : 'status');
   el.innerHTML = '<i class="bi ' + ic + '"></i><div class="grow">' + E(msg) + '</div>';
@@ -388,7 +395,7 @@ async function isiAwal() {
     if (!L.dari) setPreset('bulan');
     kerja.push(['keuangan', { dari: L.dari, sampai: L.sampai, grain: L.grain }, 30000]);
   }
-  for (const k of kerja) { if (!S.ready) return; try { await call(k[0], k[1], { fresh: k[2], stale: 600000 }); } catch (e) { /* senyap */ } await tunda(400); }
+  for (const k of kerja) { if (!S.ready) return; try { await tungguSepi(); await call(k[0], k[1], { fresh: k[2], stale: 600000 }); } catch (e) { /* senyap */ } await tunda(400); }
 }
 async function mulaiApp(dataAwal) {
   const d = dataAwal || await call('bootstrap');
