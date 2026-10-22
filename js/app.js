@@ -92,13 +92,13 @@ function syncPill() {
 // \u2500\u2500 Pemanggil API (satu gerbang: fetch POST ke Apps Script Web App) \u2500\u2500
 const GAS_URL = (window.NX_CONFIG && window.NX_CONFIG.GAS_URL) || '';
 // Aksi BACA murni (aman di-retry & di-cache sebentar). Aksi lain dianggap tulis \u2192 cache dibuang, dikirim dengan reqId (idempoten).
-const AKSI_BACA = /^(bootstrap|dash|laporan|master\.semua|invoice\.(daftar|detail)|audit\.daftar|bhp\.log|pasien\.rekam|kons\.daftar|kp\.poll|jadwal\.daftar|keluar\.daftar|keuangan)$/;
+const AKSI_BACA = /^(bootstrap|dash|laporan|master\.semua|invoice\.(daftar|detail)|audit\.daftar|bhp\.log|pasien\.rekam|kons\.daftar|kp\.poll|jadwal\.daftar|keluar\.daftar|keuangan|batch)$/;
 const MEMC = {};                       // cache di memori saja (tidak disimpan ke disk: data pasien tidak boleh tertinggal di perangkat)
 const uuid = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12) + '-' + Math.random().toString(36).slice(2, 8));
 const tunda = ms => new Promise(r => setTimeout(r, ms));
 let CACHE_V = 0;                      // naik setiap cache dibuang \u2192 hasil refresh latar yang lahir sebelum penulisan tidak boleh masuk cache
 function bersihkanCache() { CACHE_V++; Object.keys(MEMC).forEach(k => delete MEMC[k]); }
-const APP_VER = '2.8.7';
+const APP_VER = '2.8.9';
 /** Pemanasan: bangunkan Apps Script selagi pengguna mengetik/membaca, supaya panggilan nyata tidak menanggung cold start. */
 function pemanasan() { if (!GAS_URL || /GANTI/.test(GAS_URL)) return; try { fetch(GAS_URL + (GAS_URL.indexOf('?') < 0 ? '?' : '&') + 'ping=' + Date.now(), { mode: 'no-cors', cache: 'no-store' }).catch(() => {}); } catch (e) { /* abaikan */ } }
 /** Pengukur performa: di console ketik Perf.table() — 'net' besar & 'server' kecil = jaringan/cold start; 'server' besar = Sheets/tulis. */
@@ -131,8 +131,27 @@ async function kirimSekali(aksi, payload, timeoutMs, reqId) {
 let AKTIF = 0;                         // jumlah permintaan yang sedang berjalan
 /** Pekerjaan latar menunggu sampai tidak ada permintaan pengguna yang berjalan (maks ~6 dtk), supaya tidak menumpuk di Apps Script. */
 async function tungguSepi() { for (let i = 0; i < 20 && AKTIF > 0; i++) await tunda(300); }
-async function ambil(aksi, payload) {
+async function ambilTunggal(aksi, payload) {
   AKTIF++; try { return await ambilInti(aksi, payload); } finally { AKTIF--; }
+}
+/** Penggabung batch: aksi BACA yang diminta dalam satu \"tik\" (\u224820 ms) dikirim sebagai SATU eksekusi server.
+ *  Server lama (belum kenal 'batch') terdeteksi otomatis \u2192 kembali ke panggilan satuan. */
+const BATCH_AKSI = /^(dash|laporan|keuangan|invoice\.daftar|keluar\.daftar|master\.semua|jadwal\.daftar)$/;
+let BATCH_MATI = false; const BQ = { q: null };
+function ambil(aksi, payload) {
+  if (BATCH_MATI || !BATCH_AKSI.test(aksi)) return ambilTunggal(aksi, payload);
+  return new Promise(res => { if (!BQ.q) { BQ.q = []; setTimeout(kirimBatch, 20); } BQ.q.push({ aksi, payload, res }); });
+}
+async function kirimBatch() {
+  const q = BQ.q; BQ.q = null; if (!q || !q.length) return;
+  if (q.length === 1) return q[0].res(await ambilTunggal(q[0].aksi, q[0].payload));
+  const h = await ambilTunggal('batch', { calls: q.map(x => ({ aksi: x.aksi, payload: x.payload || {} })) });
+  const d = h.j && h.j.success && h.j.data;
+  if (d && Array.isArray(d.hasil) && d.hasil.length === q.length) { q.forEach((x, i) => x.res({ j: Object.assign({}, d.hasil[i], { ms: h.j.ms }) })); return; }
+  if (h.j && (h.j.code === 'AUTH')) { q.forEach(x => x.res({ j: h.j })); return; }
+  if (!h.j) { if (h.err || h.detail) { q.forEach(x => x.res(h)); return; } }
+  if (h.j && /tidak dikenal/i.test(h.j.message || '')) BATCH_MATI = true;   // backend lama
+  await Promise.all(q.map(x => ambilTunggal(x.aksi, x.payload).then(x.res)));
 }
 async function ambilInti(aksi, payload) {
   const baca = AKSI_BACA.test(aksi), reqId = baca ? '' : uuid();
@@ -160,7 +179,20 @@ function segarkanDiam(aksi, payload, ck, opt) {
   }).finally(() => { delete SEGAR[ck]; });
 }
 /** call(aksi, payload, {fresh: ms, stale: ms, baru: fn}) \u2014 fresh: pakai hasil di memori bila masih segar (hanya aksi baca). */
+const INFLIGHT = {};
+/** Baca identik yang sedang berjalan DIBAGI (mis. klik menu saat pengambilan latar masih jalan) \u2192 satu eksekusi server, bukan dua.
+ *  Kunci memuat CACHE_V: begitu ada penulisan, baca sesudahnya tidak menumpang baca lama (hindari data basi). */
 function call(aksi, payload, opt) {
+  if (!AKSI_BACA.test(aksi)) return callInti(aksi, payload, opt);
+  const k = CACHE_V + '|' + aksi + '|' + JSON.stringify(payload || {});
+  if (INFLIGHT[k]) return INFLIGHT[k].then(d => JSON.parse(d));
+  const p = callInti(aksi, payload, opt).then(d => JSON.stringify(d === undefined ? null : d));
+  INFLIGHT[k] = p;
+  const bersih = () => { if (INFLIGHT[k] === p) delete INFLIGHT[k]; };
+  p.then(bersih, bersih);
+  return p.then(d => JSON.parse(d));
+}
+function callInti(aksi, payload, opt) {
   return new Promise((res, rej) => {
     const baca = AKSI_BACA.test(aksi), ck = baca && opt && opt.fresh ? aksi + '|' + JSON.stringify(payload || {}) : '';
     if (ck && MEMC[ck]) {
@@ -395,7 +427,8 @@ async function isiAwal() {
     if (!L.dari) setPreset('bulan');
     kerja.push(['keuangan', { dari: L.dari, sampai: L.sampai, grain: L.grain }, 30000]);
   }
-  for (const k of kerja) { if (!S.ready) return; try { await tungguSepi(); await call(k[0], k[1], { fresh: k[2], stale: 600000 }); } catch (e) { /* senyap */ } await tunda(400); }
+  if (!S.ready) return; await tungguSepi();
+  await Promise.all(kerja.map(k => call(k[0], k[1], { fresh: k[2], stale: 600000 }).catch(() => { /* senyap */ })));   // serentak \u2192 digabung jadi satu batch
 }
 async function mulaiApp(dataAwal) {
   const d = dataAwal || await call('bootstrap');
