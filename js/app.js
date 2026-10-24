@@ -98,7 +98,7 @@ const uuid = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 
 const tunda = ms => new Promise(r => setTimeout(r, ms));
 let CACHE_V = 0;                      // naik setiap cache dibuang \u2192 hasil refresh latar yang lahir sebelum penulisan tidak boleh masuk cache
 function bersihkanCache() { CACHE_V++; Object.keys(MEMC).forEach(k => delete MEMC[k]); }
-const APP_VER = '2.8.9';
+const APP_VER = '2.9.0';
 /** Pemanasan: bangunkan Apps Script selagi pengguna mengetik/membaca, supaya panggilan nyata tidak menanggung cold start. */
 function pemanasan() { if (!GAS_URL || /GANTI/.test(GAS_URL)) return; try { fetch(GAS_URL + (GAS_URL.indexOf('?') < 0 ? '?' : '&') + 'ping=' + Date.now(), { mode: 'no-cors', cache: 'no-store' }).catch(() => {}); } catch (e) { /* abaikan */ } }
 /** Pengukur performa: di console ketik Perf.table() — 'net' besar & 'server' kecil = jaringan/cold start; 'server' besar = Sheets/tulis. */
@@ -1297,8 +1297,9 @@ ACT['v.final'] = async btn => {
 };
 function sukses() {
   const r = V.hasil;
+  if (r && r.resumeTunda && !r._rs) { r._rs = 1; call('resume.siapkan', { soap_id: r.soap_id }).catch(() => { /* dibuat saat dibuka */ }); }   // PDF dibuat di latar, tidak menahan layar
   put('#wizBody', html`<div class="nx-card accent text-center" style="padding:32px 20px"><div class="ill" style="width:72px;height:72px;margin:0 auto 14px;border-radius:50%;background:var(--ok-bg);color:var(--ok);display:grid;place-items:center;font-size:36px"><i class="bi bi-check-lg"></i></div>
-    <div class="t-h2">${V.revisi ? 'Revisi tersimpan' : 'Kunjungan selesai'}</div><p class="muted mt8">Catatan SOAP ${V.p.nama} telah dikunci${r.resume ? ' dan resume medis dibuat (' + r.resume.no_resume + ')' : ''}.</p>
+    <div class="t-h2">${V.revisi ? 'Revisi tersimpan' : 'Kunjungan selesai'}</div><p class="muted mt8">Catatan SOAP ${V.p.nama} telah dikunci${r.resume ? ' dan resume medis dibuat (' + r.resume.no_resume + ')' : (r.resumeTunda ? ' dan resume medis sedang disiapkan' : '')}.</p>
     ${S.user && S.user.punya_ttd === false ? html`<div class="nx-alert warn mt16" style="text-align:left"><i class="bi bi-pen"></i><div>Tanda tangan Anda belum diunggah, sehingga resume tercetak tanpa TTD petugas. Unggah di menu Profil, lalu buka resume dan tekan <b>Buat ulang</b>.</div></div>` : ''}
     ${r.pdfGagal ? html`<div class="nx-alert warn mt16" style="text-align:left"><i class="bi bi-exclamation-triangle-fill"></i><div>Resume PDF belum berhasil dibuat. Catatan aman \u2014 buka kembali dari Kronologi SOAP untuk membuat ulang.</div></div>` : ''}
     ${r.invoice && isKelola() ? html`<div class="nx-note mt16" style="justify-content:center"><i class="bi bi-receipt"></i> ${r.invoice.paket ? 'Invoice paket ' + rp(r.invoice.total) + ' sudah terbit saat pendaftaran.' : 'Invoice draft ' + rp(r.invoice.total) + ' menunggu tinjauan.'}</div>` : ''}
@@ -1388,7 +1389,7 @@ function sinkronInv(r) { const i = (T.list || []).find(x => x.invoice_id === r.i
 ACT['inv.simpan'] = async btn => { try { await denganSibuk(btn, () => simpanInv()); gambarInv(); toast('Perubahan invoice tersimpan.'); } catch (e) { galat(e); } };
 ACT['inv.terbit'] = async btn => {
   if (!await konfirmasi({ title: 'Terbitkan invoice', msg: 'Invoice akan diberi nomor resmi dan tidak dapat diubah lagi. Lanjutkan?', ok: 'Terbitkan' })) return;
-  try { await denganSibuk(btn, async () => { await simpanInv(); const r = await call('invoice.terbit', { invoice_id: T.D.invoice.invoice_id }); T.D.invoice = r.invoice; sinkronInv(r.invoice); S.dashDraft = Math.max(0, (S.dashDraft || 1) - 1); hitungBadge(); gambarInvList(); toast('Invoice ' + r.invoice.no_invoice + ' terbit.' + (r.pdfGagal ? ' (PDF akan dibuat saat dibuka)' : '')); }); gambarInv(); } catch (e) { galat(e); }
+  try { await denganSibuk(btn, async () => { await simpanInv(); const r = await call('invoice.terbit', { invoice_id: T.D.invoice.invoice_id }); call('invoice.siapkanPdf', { invoice_id: r.invoice.invoice_id }).catch(() => { /* dibuat saat dibuka */ }); T.D.invoice = r.invoice; sinkronInv(r.invoice); S.dashDraft = Math.max(0, (S.dashDraft || 1) - 1); hitungBadge(); gambarInvList(); toast('Invoice ' + r.invoice.no_invoice + ' terbit. PDF sedang disiapkan.'); }); gambarInv(); } catch (e) { galat(e); }
 };
 ACT['inv.batal'] = async () => {
   const a = await konfirmasi({ title: 'Batalkan invoice', msg: 'Invoice dibatalkan dan tidak dihitung dalam laporan.', ok: 'Batalkan invoice', danger: true, input: { label: 'Alasan pembatalan' } }); if (!a) return;
