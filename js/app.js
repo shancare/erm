@@ -98,7 +98,7 @@ const uuid = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 
 const tunda = ms => new Promise(r => setTimeout(r, ms));
 let CACHE_V = 0;                      // naik setiap cache dibuang \u2192 hasil refresh latar yang lahir sebelum penulisan tidak boleh masuk cache
 function bersihkanCache() { CACHE_V++; Object.keys(MEMC).forEach(k => delete MEMC[k]); }
-const APP_VER = '2.9.0';
+const APP_VER = '2.9.1';
 /** Pemanasan: bangunkan Apps Script selagi pengguna mengetik/membaca, supaya panggilan nyata tidak menanggung cold start. */
 function pemanasan() { if (!GAS_URL || /GANTI/.test(GAS_URL)) return; try { fetch(GAS_URL + (GAS_URL.indexOf('?') < 0 ? '?' : '&') + 'ping=' + Date.now(), { mode: 'no-cors', cache: 'no-store' }).catch(() => {}); } catch (e) { /* abaikan */ } }
 /** Pengukur performa: di console ketik Perf.table() — 'net' besar & 'server' kecil = jaringan/cold start; 'server' besar = Sheets/tulis. */
@@ -1413,14 +1413,26 @@ ACT['by.simpan'] = async btn => {
   catch (e) { T.D.invoice = snap; sinkronInv(snap); gambarInv(); galat(e); }
 };
 ACT['inv.pdf'] = () => lihatPdf('Invoice', 'dokumen.pdf', { jenis: 'invoice', id: T.D.invoice.invoice_id });
-ACT['inv.wa'] = () => bagikanWa('invoice', T.D.invoice.invoice_id, T.D.pasien, { no: T.D.invoice.no_invoice, total: rp(T.D.invoice.total), jatuh_tempo: tglS(T.D.invoice.jatuh_tempo) });
+const WA_INV_BELUM = 'Yth. {nama}, berikut invoice {no} dari {klinik} sebesar {total}.\nPembayaran dapat dilakukan dengan transfer ke rekening:\n{rekening}\nUnduh invoice: {link}\nTerima kasih.';
+const WA_INV_SEBAGIAN = 'Yth. {nama}, kami telah menerima pembayaran {dibayar} untuk invoice {no} dari {klinik}. Sisa tagihan {sisa}.\nPembayaran dapat dilakukan dengan transfer ke rekening:\n{rekening}\nRincian: {link}\nTerima kasih.';
+const WA_INV_LUNAS = 'Yth. {nama}, pembayaran invoice {no} sebesar {total} telah kami terima. Terima kasih atas kepercayaan Anda kepada {klinik}.\nBukti pembayaran (LUNAS): {link}';
+const WA_INV_LAMA = 'Yth. {nama}, berikut invoice {no} dari {klinik} sebesar {total}. Unduh: {link}\nTerima kasih.';
+/** Pilih templat WhatsApp invoice sesuai status bayar, agar pasien yang sudah membayar tidak menerima kalimat penagihan. */
+function tplInvoice(i) {
+  const c = S.cfg, lunas = i.status_bayar === 'LUNAS', sebagian = i.status_bayar === 'SEBAGIAN';
+  if (lunas) return (c.wa_template_invoice_lunas || '').trim() || WA_INV_LUNAS;
+  if (sebagian) return (c.wa_template_invoice_sebagian || '').trim() || WA_INV_SEBAGIAN;
+  const t = (c.wa_template_invoice || '').trim();
+  return !t || t === WA_INV_LAMA.trim() ? WA_INV_BELUM : t;   // templat bawaan lama diganti yang baru; templat buatan sendiri tetap dipakai
+}
+ACT['inv.wa'] = () => { const i = T.D.invoice; bagikanWa('invoice', i.invoice_id, T.D.pasien, { no: i.no_invoice, total: rp(i.total), jatuh_tempo: tglS(i.jatuh_tempo), dibayar: rp(i.jumlah_dibayar || 0), sisa: rp(Math.max(0, (+i.total || 0) - (+i.jumlah_dibayar || 0))), rekening: String(S.cfg.rekening || '').trim() || '(isi rekening di Pengaturan)' }, tplInvoice(i)); };
 
 /** Tautan WhatsApp: PDF dibagikan lewat tautan Drive (siapa pun yang punya tautan), pesan dari templat pengaturan. */
-async function bagikanWa(jenis, id, pasien, extra) {
+async function bagikanWa(jenis, id, pasien, extra, tplOverride) {
   MD.open('mdl2', { title: 'Kirim via WhatsApp', body: skel(2, 60) });
   try {
     const r = await call('dokumen.bagikan', { jenis: jenis, id: id });
-    const tpl = jenis === 'invoice' ? S.cfg.wa_template_invoice : (jenis === 'surat' ? 'Halo {nama}, berikut surat keterangan sakit dari {klinik}. Unduh PDF-nya di sini: {link}\nSemoga lekas pulih.' : jenis === 'resep' || jenis === 'resepk' ? 'Halo {nama}, berikut resep obat dari {klinik}. Unduh PDF-nya di sini: {link}\nGunakan sesuai anjuran dokter. Terima kasih.' : S.cfg.wa_template_resume);
+    const tpl = tplOverride || (jenis === 'invoice' ? S.cfg.wa_template_invoice : (jenis === 'surat' ? 'Halo {nama}, berikut surat keterangan sakit dari {klinik}. Unduh PDF-nya di sini: {link}\nSemoga lekas pulih.' : jenis === 'resep' || jenis === 'resepk' ? 'Halo {nama}, berikut resep obat dari {klinik}. Unduh PDF-nya di sini: {link}\nGunakan sesuai anjuran dokter. Terima kasih.' : S.cfg.wa_template_resume));
     const teks = isiTemplate(tpl, Object.assign({ nama: pasien.nama, klinik: S.cfg.nama_klinik, link: r.url }, extra));
     const href = () => waUrl(pasien.no_wa, $('#waMsg').value);
     put($('#mdl2 .modal-body'), html`<div class="nx-alert info mb12"><i class="bi bi-info-circle-fill"></i><div>Tautan dokumen dibuat untuk <b>${pasien.nama}</b> (${pasien.no_wa}). Siapa pun yang memegang tautan dapat membuka PDF \u2014 kirim hanya ke nomor yang benar.</div></div><label class="nx-lab" for="waMsg">Pesan</label><textarea id="waMsg" class="nx-ta" style="min-height:140px">${teks}</textarea>`);
@@ -1552,7 +1564,7 @@ function tabKlinik(el) {
     <div class="nx-field"><label class="nx-lab">Logo (tampil di aplikasi & kop PDF)</label><div class="row-gap"><img id="logoPrev" src="${c.logo || LOGO_FULL}" alt="Logo" style="height:48px;border-radius:8px;background:#fff;padding:2px"><label class="nx-btn secondary sm" style="margin:0"><i class="bi bi-upload"></i> Unggah<input type="file" accept="image/png,image/jpeg" data-ch="c.logo" class="hide"></label>${c.logo ? html`<button class="nx-btn ghost sm" data-act="c.logoHapus">Pakai bawaan</button>` : ''}</div><div class="nx-help">PNG/JPG, diperkecil otomatis.</div></div></div>
   <div class="nx-card"><div class="nx-sec-title mb16"><i class="bi bi-receipt"></i> Invoice & Jadwal</div><div class="nx-grid2" style="gap:0 16px">${medan('cPre', 'Prefix invoice', { v: c.prefix_invoice, max: 8 })}${medan('cJt', 'Jatuh tempo (hari)', { v: c.jatuh_tempo_hari, inputmode: 'numeric' })}</div>${medan('cBuf', 'Jeda transit antar kunjungan (menit)', { v: c.buffer_transit_menit, inputmode: 'numeric', help: 'Dipakai untuk mendeteksi bentrok jadwal petugas.' })}${medan('cPj', 'Persen jual BHP bawaan (%)', { v: c.persen_jual_bhp, inputmode: 'decimal', help: 'Harga jual BHP = harga beli + persen ini, dibulatkan ke Rp 500. Dapat diganti per BHP.' })}${medan('cRek', 'Informasi pembayaran (rekening / QRIS)', { v: c.rekening, ta: 1, h: 72, help: 'Tercetak pada invoice.' })}</div></div>
   <div class="nx-card mt16"><div class="nx-sec-title mb16"><i class="bi bi-chat-dots"></i> Konsultasi Online</div>${medan('cKu', 'Alamat halaman konsultasi (Blogger)', { v: c.konsultasi_url, ph: 'https://klinikanda.blogspot.com/p/k.html', help: 'Tautan pasien = alamat ini + ?k=KODE. Gunakan alamat halaman pendek agar tautan singkat. Kosongkan untuk memakai alamat Apps Script.' })}${medan('cKj', 'Masa berlaku tautan (jam)', { v: c.konsultasi_jam, inputmode: 'numeric', help: 'Tautan juga langsung kedaluwarsa saat dokter menyelesaikan percakapan.' })}${medan('cWk', 'Templat pesan WhatsApp konsultasi', { v: c.wa_template_konsultasi, ta: 1, h: 90, help: 'Variabel: {nama} {dokter} {link} {berlaku} {klinik}' })}</div>
-  <div class="nx-card mt16"><div class="nx-sec-title mb16"><i class="bi bi-whatsapp"></i> Templat Pesan WhatsApp</div>${medan('cWi', 'Templat invoice', { v: c.wa_template_invoice, ta: 1, h: 72, help: 'Variabel: {nama} {no} {total} {jatuh_tempo} {klinik} {link}' })}${medan('cWr', 'Templat resume medis', { v: c.wa_template_resume, ta: 1, h: 72, help: 'Variabel: {nama} {tanggal} {klinik} {link}' })}</div>
+  <div class="nx-card mt16"><div class="nx-sec-title mb16"><i class="bi bi-whatsapp"></i> Templat Pesan WhatsApp</div>${medan('cWi', 'Templat invoice \u2014 belum dibayar', { v: (c.wa_template_invoice || '').trim() === WA_INV_LAMA.trim() ? '' : c.wa_template_invoice, ta: 1, h: 96, ph: WA_INV_BELUM, help: 'Kosongkan untuk memakai bawaan. Variabel: {nama} {no} {total} {rekening} {klinik} {link} {jatuh_tempo}' })}${medan('cWs', 'Templat invoice \u2014 dibayar sebagian', { v: c.wa_template_invoice_sebagian, ta: 1, h: 96, ph: WA_INV_SEBAGIAN, help: 'Kosongkan untuk memakai bawaan. Tambahan: {dibayar} {sisa}' })}${medan('cWl', 'Templat invoice \u2014 lunas', { v: c.wa_template_invoice_lunas, ta: 1, h: 72, ph: WA_INV_LUNAS, help: 'Kosongkan untuk memakai bawaan. Dikirim saat invoice sudah lunas.' })}${medan('cWr', 'Templat resume medis', { v: c.wa_template_resume, ta: 1, h: 72, help: 'Variabel: {nama} {tanggal} {klinik} {link}' })}</div>
   <div class="mt16"><button class="nx-btn primary" data-act="c.simpan"><i class="bi bi-check2"></i> Simpan Pengaturan</button></div>`);
 }
 INP['c.logo'] = el => {
@@ -1564,7 +1576,7 @@ INP['c.logo'] = el => {
 };
 ACT['c.logoHapus'] = async () => { try { const r = await call('config.simpan', { hapus_logo: true }); M.d.config = r; S.cfg = r; gambarShell(); render(true); toast('Logo bawaan dipakai.'); } catch (e) { galat(e); } };
 ACT['c.simpan'] = async btn => {
-  bersihGalat($('#mTab')); const d = { nama_klinik: val('cNama'), alamat: val('cAl'), telepon: val('cTel'), email: val('cEm'), prefix_invoice: val('cPre'), jatuh_tempo_hari: val('cJt'), buffer_transit_menit: val('cBuf'), persen_jual_bhp: val('cPj'), rekening: val('cRek'), wa_template_invoice: val('cWi'), wa_template_resume: val('cWr'), konsultasi_url: val('cKu'), konsultasi_jam: val('cKj'), wa_template_konsultasi: val('cWk') };
+  bersihGalat($('#mTab')); const d = { nama_klinik: val('cNama'), alamat: val('cAl'), telepon: val('cTel'), email: val('cEm'), prefix_invoice: val('cPre'), jatuh_tempo_hari: val('cJt'), buffer_transit_menit: val('cBuf'), persen_jual_bhp: val('cPj'), rekening: val('cRek'), wa_template_invoice: val('cWi'), wa_template_invoice_sebagian: val('cWs'), wa_template_invoice_lunas: val('cWl'), wa_template_resume: val('cWr'), konsultasi_url: val('cKu'), konsultasi_jam: val('cKj'), wa_template_konsultasi: val('cWk') };
   if (d.nama_klinik.length < 3) return bad('cNama', 'Nama klinik wajib diisi.'); if (d.persen_jual_bhp === '' || !(num(d.persen_jual_bhp) >= 0 && num(d.persen_jual_bhp) <= 1000)) return bad('cPj', 'Isi persen 0\u20131000.'); if (!/^[A-Za-z0-9]{2,8}$/.test(d.prefix_invoice)) return bad('cPre', '2\u20138 huruf/angka.');
   if (d.konsultasi_url && !/^https:\/\/[^\s?#]+$/.test(d.konsultasi_url)) return bad('cKu', 'Harus diawali https:// dan tanpa ? atau #.');
   if (M.logo) d.logo_data = M.logo;

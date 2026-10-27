@@ -237,3 +237,84 @@ Backend `Kode.gs` dan frontend sama-sama diperbarui. Data dan alur kerja tidak b
 **Wajib setelah memasang versi ini:** jalankan fungsi `siapkanV142` sekali lagi, lalu *Deploy → Kelola deployment → ✏️ Edit → Versi baru → Deploy* supaya URL tetap sama.
 
 **Catatan jujur:** entri audit baca yang masih menunggu di antrean (maksimal 5 menit) bisa hilang bila Google mengosongkan cache. Audit penting (ubah data, akses ditolak, login gagal) selalu ditulis langsung. Menu Audit Log sudah menampilkan entri yang masih menunggu.
+
+
+## Catatan Versi 2.8.1 (resume 1 halaman)
+
+- Resume Medis dirapikan agar muat **satu halaman** untuk kunjungan umum (lebih panjang tetap lanjut ke halaman 2). Ukuran huruf tabel diseragamkan, BHP dibuat dua kolom, jarak dirapatkan.
+- Baris GDA / Asam Urat / Kolesterol hanya tampil bila ada isinya. Dosis kosong tampil "-". Label "No. SIP / STR" menjadi "Izin praktik". Format waktu tanda tangan disamakan (17 Okt 2026 17:04).
+- Saat petugas memfinalkan SOAP tanpa tanda tangan tersimpan, muncul peringatan agar mengunggahnya di menu Profil.
+- Di pratinjau Resume ada tombol **Buat ulang**. Gunakan setelah mengunggah tanda tangan atau memperbaiki data master (misalnya satuan BHP). Nomor resume tetap sama.
+- Resume lama tidak berubah otomatis; buka lalu tekan **Buat ulang**.
+
+## v2.8.2 — Beli BHP baru langsung dari form pembelian
+- Di form **Beli BHP** kini ada pilihan **＋ BHP baru (belum ada di daftar)**. Isi nama, satuan (opsional: stok minimum, persen jual), jumlah dan harga beli — master BHP dibuat otomatis bersamaan dengan pembelian pertama.
+- Nama yang sama dengan BHP yang sudah ada ditolak (pilih dari daftar). Semua validasi dicek dulu, sehingga master tidak terbuat jika pembelian gagal.
+- Yang diubah: `Kode.gs` (tempel ulang + Deploy versi baru) dan `js/app.js`. **Jangan timpa `js/config.js`.**
+
+## v2.8.3 — Kop surat & resume lebih rapi
+- Kop dokumen (resume, resep, surat sakit, invoice, laporan): logo tetap, teks di sampingnya lebih besar dan tegas, dengan garis pemisah tipis, alamat dan kontak lebih terbaca.
+- Resume: baris "-" tunggal di bagian Objektif disembunyikan jika catatan objektif kosong.
+- Hanya `Kode.gs` yang berubah (tempel ulang + Deploy versi baru). Frontend tidak perlu diganti.
+
+## v2.8.4 — Ukuran huruf seragam di PDF lain
+- Invoice, resep, surat sakit, dan laporan kini memakai penyeragaman ukuran huruf tabel yang sama seperti resume, sehingga teks di dalam tabel tidak mengecil di hasil PDF.
+- Hanya `Kode.gs` yang berubah (tempel ulang + Deploy versi baru). Frontend tidak perlu diganti.
+
+## v2.8.5 — Invoice & surat sakit: kertas A5 lanskap
+- Invoice dan surat sakit dicetak A5 lanskap (210 × 148 mm). Resume, resep, dan laporan tetap A4.
+- **Uji sekali setelah deploy:** buka editor Apps Script, pilih fungsi `ujiUkuranPdf`, klik Run, lalu lihat *Execution log*. Hasil yang diharapkan: `595 x 420 pt → A5 LANSKAP — berhasil`. Jika tertulis "A4 potret — ukuran A5 DIABAIKAN", kabari agar dipasang rencana cadangan.
+- Hanya `Kode.gs` yang berubah (tempel ulang + Deploy versi baru). Frontend tidak perlu diganti.
+
+## v2.8.6 — Layar terasa instan (hanya frontend)
+- **Data lama tampil dulu, diperbarui diam-diam** untuk Master Data, Tagihan, Pengeluaran, Laporan Operasional, dan Laporan Keuangan. Layar yang sudah pernah dibuka tidak lagi menampilkan kerangka abu-abu.
+- **Pengambilan data awal di latar** setelah login (Superadmin: Master Data, Laporan Keuangan, Tagihan; Admin: Tagihan), sehingga saat menu diklik datanya sudah siap.
+- **Perbaikan cache:** `keuangan`, `keluar.daftar`, dan `jadwal.daftar` sebelumnya salah dianggap aksi tulis sehingga setiap membukanya membuang seluruh cache. Sekarang dikenali sebagai aksi baca.
+- **Menu Profil → Kecepatan** (Superadmin): tabel waktu rata-rata/maksimum tiap aksi, waktu kerja server, dan ukuran jawaban (KB). Berguna untuk mencari layar yang lambat tanpa konsol browser.
+- Teks versi di Profil kini mengikuti versi aplikasi.
+- Hanya `js/app.js` yang berubah. **Jangan timpa `js/config.js`.** Kode.gs tidak berubah.
+
+## v2.8.7 — Pesan "Server tidak membalas dengan benar"
+- Jawaban non-JSON dari Google (halaman error HTML saat Apps Script sibuk) kini otomatis dicoba ulang (sampai 3 kali untuk baca, 2 kali untuk tulis — aman karena tulis memakai reqId), dan pesan akhirnya lebih jelas: "Server Google sedang sibuk".
+- Pengambilan data latar menunggu sampai tidak ada permintaan pengguna yang berjalan, agar tidak menumpuk.
+- Pesan toast yang sama tidak lagi ditampilkan dobel.
+- Hanya `js/app.js` yang berubah. **Jangan timpa `js/config.js`.**
+
+## v2.8.6 (backend) — Cache data 6 jam & log LAMBAT lebih informatif
+- Cache data sheet kini bertahan 6 jam (sebelumnya 5 menit, hampir sama dengan interval pemanasan sehingga sering kedaluwarsa tepat sebelum dipakai). Aman karena cache berversi: setiap penulisan lewat aplikasi menaikkan versi sheet itu. Jika kunci versi hilang, dibuat versi baru sehingga data lama tidak pernah tersaji.
+- Pemanasan (tiap 5 menit, jam 06–22) kini mengisi lebih banyak sheet (Pengeluaran, Konsultasi, Tanda Vital, SOAP, Resep, Resume, Surat Sakit, dll.) dan konfigurasi/logo.
+- Audit Log "LAMBAT" kini memuat nama aksi, mis. `master.semua • 3059 ms`, dan login ikut dicatat.
+- **Jika Anda mengubah isi Google Sheets langsung** (bukan lewat aplikasi), jalankan fungsi `segarkanCache` dari editor Apps Script agar aplikasi membaca data terbaru.
+- Hanya `Kode.gs` yang berubah (tempel ulang + Deploy versi baru).
+
+## v2.8.8 — Permintaan baca identik dibagi (hanya frontend)
+- Jika dua permintaan baca yang sama berjalan bersamaan (mis. klik menu saat pengambilan data latar masih berjalan), hanya satu yang dikirim ke server dan hasilnya dibagi. Permintaan baca sesudah ada penulisan tidak ikut menumpang.
+- Hanya `js/app.js` yang berubah. **Jangan timpa `js/config.js`.**
+
+## v2.8.9 (frontend) + Kode.gs v2.8.7 — Batch: beberapa data dalam satu eksekusi
+- Backend: aksi baru `batch` menjalankan beberapa aksi BACA dalam satu eksekusi (maks. 8). Peran dicek per aksi, aksi tulis/publik ditolak, dan log LAMBAT mencatat nama gabungan, mis. `batch[dash+laporan] • 3100 ms`.
+- Frontend: permintaan baca yang diminta bersamaan otomatis digabung (beranda: `dash` + `laporan`; pengambilan data awal: Master Data + Laporan Keuangan + Tagihan menjadi satu batch). Jika backend belum diperbarui, frontend mendeteksinya dan memakai panggilan satuan.
+- Urutan update disarankan: **Kode.gs dahulu, lalu frontend** (keduanya tetap saling kompatibel).
+- **Jangan timpa `js/config.js`.**
+
+## Kode.gs v2.8.8 — Invoice kembali ke A4 potret + subtotal per kelompok
+- Invoice dicetak A4 potret (lebar sama dengan sebelumnya, tinggi lebih lega) sehingga total tidak lagi terpisah ke halaman kedua. Surat sakit tetap A5 lanskap.
+- Ringkasan angka kini: Subtotal tindakan, Subtotal BHP, Biaya lain, lalu TOTAL TAGIHAN.
+- Invoice yang PDF-nya sudah pernah dibuat/dibagikan (tersimpan di Drive) tetap memakai tampilan lama; invoice baru memakai tampilan baru.
+- Hanya `Kode.gs` yang berubah (tempel ulang + Deploy versi baru). Frontend tidak perlu diganti.
+
+## Kode.gs v2.8.9 + app.js v2.9.0 — Simpan lebih cepat: PDF dibuat di latar
+- **Finalisasi SOAP** dan **Terbitkan invoice** tidak lagi menunggu pembuatan PDF (sebelumnya 14–16 detik). Data langsung tersimpan; PDF resume/invoice disiapkan di latar belakang lewat aksi baru `resume.siapkan` dan `invoice.siapkanPdf`.
+- Jika resume/invoice dibuka atau dibagikan sebelum PDF selesai, sistem menunggu proses yang berjalan (maks. ±18 detik) lalu memakai hasilnya — tidak membuat file ganda. Resume selalu sesuai REVISI SOAP saat ini.
+- Nomor resume/invoice, penguncian data, dan isi dokumen tidak berubah. Tombol "Buat ulang" tetap membuat resume baru.
+- Urutan update: **Kode.gs dahulu, lalu frontend**. **Jangan timpa `js/config.js`.**
+
+## Backend v2.9.1 — simpan SOAP lebih ringan (hanya Kode.gs)
+- Simpan draft/final tidak lagi menulis ulang tabel anak (vital, penunjang, tindakan, BHP, resep) yang isinya sama dengan simpanan terakhir; draft tanpa perubahan teks tidak menulis baris SOAP; log draft ditunda.
+- Frontend tidak berubah (tetap v2.9.0). Cara pasang: tempel Kode.gs → Simpan → Deploy → Kelola deployment → ✏️ Edit → Versi baru → Deploy.
+- Catatan: bila tabel anak SOAP diedit manual di Spreadsheet, simpanan identik dari aplikasi dilewati hingga 6 jam; ubah lewat aplikasi (revisi) agar konsisten.
+
+## v2.9.2 — Templat WhatsApp invoice per status
+- Tiga templat di Pengaturan → Templat Pesan WhatsApp: belum dibayar, dibayar sebagian, lunas (kosong = bawaan). Variabel baru: {rekening} {dibayar} {sisa}.
+- Templat lama bawaan otomatis diganti yang baru; templat buatan sendiri tetap dipakai.
+- Pasang: Kode.gs (Deploy → Kelola deployment → Edit → Versi baru) lalu frontend (git add . / git commit -m "v2.9.2" / git push). Jangan timpa js/config.js.
