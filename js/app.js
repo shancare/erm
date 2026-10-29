@@ -92,13 +92,13 @@ function syncPill() {
 // \u2500\u2500 Pemanggil API (satu gerbang: fetch POST ke Apps Script Web App) \u2500\u2500
 const GAS_URL = (window.NX_CONFIG && window.NX_CONFIG.GAS_URL) || '';
 // Aksi BACA murni (aman di-retry & di-cache sebentar). Aksi lain dianggap tulis \u2192 cache dibuang, dikirim dengan reqId (idempoten).
-const AKSI_BACA = /^(bootstrap|dash|laporan|master\.semua|invoice\.(daftar|detail)|audit\.daftar|bhp\.log|pasien\.rekam|kons\.daftar|kp\.poll|jadwal\.daftar|keluar\.daftar|keuangan|batch)$/;
+const AKSI_BACA = /^(bootstrap|dash|laporan|master\.semua|invoice\.(daftar|detail)|audit\.daftar|bhp\.log|pasien\.rekam|kons\.daftar|kp\.poll|dok\.publik|jadwal\.daftar|keluar\.daftar|keuangan|batch)$/;
 const MEMC = {};                       // cache di memori saja (tidak disimpan ke disk: data pasien tidak boleh tertinggal di perangkat)
 const uuid = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12) + '-' + Math.random().toString(36).slice(2, 8));
 const tunda = ms => new Promise(r => setTimeout(r, ms));
 let CACHE_V = 0;                      // naik setiap cache dibuang \u2192 hasil refresh latar yang lahir sebelum penulisan tidak boleh masuk cache
 function bersihkanCache() { CACHE_V++; Object.keys(MEMC).forEach(k => delete MEMC[k]); }
-const APP_VER = '2.9.1';
+const APP_VER = '2.9.4';
 /** Pemanasan: bangunkan Apps Script selagi pengguna mengetik/membaca, supaya panggilan nyata tidak menanggung cold start. */
 function pemanasan() { if (!GAS_URL || /GANTI/.test(GAS_URL)) return; try { fetch(GAS_URL + (GAS_URL.indexOf('?') < 0 ? '?' : '&') + 'ping=' + Date.now(), { mode: 'no-cors', cache: 'no-store' }).catch(() => {}); } catch (e) { /* abaikan */ } }
 /** Pengukur performa: di console ketik Perf.table() — 'net' besar & 'server' kecil = jaringan/cold start; 'server' besar = Sheets/tulis. */
@@ -1432,13 +1432,15 @@ async function bagikanWa(jenis, id, pasien, extra, tplOverride) {
   MD.open('mdl2', { title: 'Kirim via WhatsApp', body: skel(2, 60) });
   try {
     const r = await call('dokumen.bagikan', { jenis: jenis, id: id });
+    r.url = location.origin + location.pathname.replace(/index\.html$/, '') + '?d=' + r.kode;
     const tpl = tplOverride || (jenis === 'invoice' ? S.cfg.wa_template_invoice : (jenis === 'surat' ? 'Halo {nama}, berikut surat keterangan sakit dari {klinik}. Unduh PDF-nya di sini: {link}\nSemoga lekas pulih.' : jenis === 'resep' || jenis === 'resepk' ? 'Halo {nama}, berikut resep obat dari {klinik}. Unduh PDF-nya di sini: {link}\nGunakan sesuai anjuran dokter. Terima kasih.' : S.cfg.wa_template_resume));
     const teks = isiTemplate(tpl, Object.assign({ nama: pasien.nama, klinik: S.cfg.nama_klinik, link: r.url }, extra));
     const href = () => waUrl(pasien.no_wa, $('#waMsg').value);
-    put($('#mdl2 .modal-body'), html`<div class="nx-alert info mb12"><i class="bi bi-info-circle-fill"></i><div>Tautan dokumen dibuat untuk <b>${pasien.nama}</b> (${pasien.no_wa}). Siapa pun yang memegang tautan dapat membuka PDF \u2014 kirim hanya ke nomor yang benar.</div></div><label class="nx-lab" for="waMsg">Pesan</label><textarea id="waMsg" class="nx-ta" style="min-height:140px">${teks}</textarea>`);
-    put($('#mdl2 .modal-footer'), html`<button class="nx-btn secondary" data-bs-dismiss="modal">Tutup</button><a class="nx-btn wa" id="waGo" data-act="wa.go" data-native="1" target="_blank" rel="noopener" href="${waUrl(pasien.no_wa, teks)}"><i class="bi bi-whatsapp"></i> Buka WhatsApp</a>`);
+    put($('#mdl2 .modal-body'), html`<div class="nx-alert info mb12"><i class="bi bi-info-circle-fill"></i><div>Tautan dokumen dibuat untuk <b>${pasien.nama}</b> (${pasien.no_wa}). Tautan ini membuka dokumen di alamat aplikasi${r.kedaluwarsa ? ' dan berlaku sampai ' + tglS(r.kedaluwarsa.slice(0, 10)) : ' tanpa batas waktu'}. Siapa pun yang memegang tautan dapat membukanya \u2014 kirim hanya ke nomor yang benar.</div></div><label class="nx-lab" for="waMsg">Pesan</label><textarea id="waMsg" class="nx-ta" style="min-height:140px">${teks}</textarea>`);
+    put($('#mdl2 .modal-footer'), html`<button class="nx-btn secondary" data-bs-dismiss="modal">Tutup</button>${isKelola() ? html`<button class="nx-btn ghost" data-act="wa.cabut"><i class="bi bi-slash-circle"></i> Cabut tautan</button>` : ''}<a class="nx-btn wa" id="waGo" data-act="wa.go" data-native="1" target="_blank" rel="noopener" href="${waUrl(pasien.no_wa, teks)}"><i class="bi bi-whatsapp"></i> Buka WhatsApp</a>`);
     $('#mdl2 .modal-footer').classList.remove('hide');
     $('#waMsg').addEventListener('input', () => { $('#waGo').href = href(); });
+    ACT['wa.cabut'] = async btn => { if (!confirm('Cabut tautan ini? Pasien tidak bisa lagi membukanya. Tautan baru dibuat saat Anda membagikan lagi.')) return; try { await denganSibuk(btn, () => call('dokumen.cabut', { jenis: jenis, id: r.ref })); toast('Tautan dicabut.', 'ok'); MD.close('mdl2'); } catch (e) { galat(e); } };
     ACT['wa.go'] = () => { if (jenis === 'invoice') call('invoice.terkirim', { invoice_id: id }).then(x => { if (T.D) { T.D.invoice.wa_terkirim_at = x.wa_terkirim_at; gambarInv(); } }).catch(() => { }); };
   } catch (e) { MD.close('mdl2'); galat(e); }
 }
@@ -1779,6 +1781,27 @@ function buatChat(root, o) {
   ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(120, ta.scrollHeight) + 'px'; if (o.onKetik) o.onKetik(); });
   ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !MOBILE_UA) { e.preventDefault(); kirim().catch(() => { }); } });
   return api_;
+}
+
+// \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 Halaman dokumen untuk pasien (tanpa login): ?d=KODE \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+function halamanDokumen(kode) {
+  document.body.classList.add('pasien-mode');
+  $('#boot').classList.add('hide'); $('#appView').classList.add('hide');
+  const v = $('#loginView'); v.classList.remove('hide');
+  const kop = (nama, logo) => html`<div class="kc-top"><img src="${logo || LOGO_FULL}" alt=""><div class="grow"><div class="nm">${nama || S.cfg.nama_klinik || 'Shancare'}</div><div class="st">Dokumen dari klinik</div></div></div>`;
+  put(v, html`<div class="kc-page"><div class="kc-shell">${kop()}<div class="kc-body" style="padding:16px">${skel(1, 280)}</div></div></div>`);
+  call('dok.publik', { kode: kode }).then(d => {
+    const blob = b64ToBlob(d.base64, d.mime), url = URL.createObjectURL(blob);
+    const nama = d.klinik && d.klinik.nama;
+    const warna = d.status === 'LUNAS' ? 'ok' : (d.status ? 'warn' : '');
+    const aksi = html`<div class="wrap-gap" style="padding:12px 16px;border-top:1px solid var(--line)"><a class="nx-btn primary" href="${url}" download="${d.nama_file}"><i class="bi bi-download"></i> Unduh PDF</a>${MOBILE_UA ? html`<a class="nx-btn secondary" href="${url}" target="_blank" rel="noopener"><i class="bi bi-box-arrow-up-right"></i> Buka PDF</a>` : ''}</div>`;
+    const isi = MOBILE_UA
+      ? html`<div class="nx-empty" style="padding:32px 16px"><div class="ill"><i class="bi bi-file-earmark-pdf"></i></div><b>${d.judul}</b>${d.status ? html`<div class="mt8"><span class="nx-badge ${warna}">${d.status}</span></div>` : ''}<div class="muted mt8">${d.nama_file}</div></div>`
+      : html`<div style="padding:12px 16px 0" class="row-between"><b>${d.judul}</b>${d.status ? html`<span class="nx-badge ${warna}">${d.status}</span>` : ''}</div><iframe class="nx-doc-frame" title="Dokumen" src="${url}" style="height:62vh;margin:12px 0 0"></iframe>`;
+    put(v, html`<div class="kc-page"><div class="kc-shell">${kop(nama, d.klinik && d.klinik.logo)}<div class="kc-body" style="flex:1;overflow:auto">${isi}</div>${aksi}</div></div>`);
+  }).catch(e => {
+    put(v, html`<div class="kc-page"><div class="kc-shell">${kop()}<div class="kc-body" style="padding:16px"><div class="nx-alert err" role="alert"><i class="bi bi-exclamation-octagon-fill"></i><div>${e.message || 'Tautan tidak dapat dibuka.'}</div></div></div></div></div>`);
+  });
 }
 
 // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 Halaman pasien (tanpa login): dibuka dari tautan ?k=KODE \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
@@ -2314,6 +2337,7 @@ ACT['k.xls'] = () => {
   terapkanTema(ls.get('shan_theme', 'auto'));
   const c = ls.json('shan_cfg', null); if (c) S.cfg = c;
   const bl = $('#bootLogo'); if (bl) { bl.onerror = () => { bl.onerror = null; bl.src = LOGO_FULL; }; bl.src = logoSrc(); }
+  if (window.NX_D) return halamanDokumen(window.NX_D);      // tautan dokumen untuk pasien: ?d=KODE
   if (window.NX_K) return halamanPasien(window.NX_K);       // tautan konsultasi pasien: ?k=KODE
   S.token = ls.get('shan_token', '');
   if (!S.token) return tampilLogin();

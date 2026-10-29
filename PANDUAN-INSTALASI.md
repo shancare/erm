@@ -318,3 +318,15 @@ Backend `Kode.gs` dan frontend sama-sama diperbarui. Data dan alur kerja tidak b
 - Tiga templat di Pengaturan → Templat Pesan WhatsApp: belum dibayar, dibayar sebagian, lunas (kosong = bawaan). Variabel baru: {rekening} {dibayar} {sisa}.
 - Templat lama bawaan otomatis diganti yang baru; templat buatan sendiri tetap dipakai.
 - Pasang: Kode.gs (Deploy → Kelola deployment → Edit → Versi baru) lalu frontend (git add . / git commit -m "v2.9.2" / git push). Jangan timpa js/config.js.
+
+## Backend v2.9.3 — arsip PDF invoice (hanya Kode.gs)
+- Saat pembayaran dicatat, PDF lama dipindah ke Drive › Invoice › Arsip (tautan WA lama tetap hidup).
+- Opsional, sekali jalan: di editor Apps Script jalankan `segarkanPdfInvoice` agar invoice lama memakai layout A4 terbaru (dibuat ulang saat dibuka).
+- Pasang: tempel Kode.gs → Simpan → Deploy → Kelola deployment → Edit → Versi baru. Frontend tidak berubah.
+
+## v2.9.4 — Tautan dokumen di alamat aplikasi
+- Tombol WhatsApp (invoice, resume, resep, surat sakit) kini mengirim `https://<alamat-aplikasi>/?d=KODE`. Pasien tanpa login melihat/mengunduh PDF; file Drive tidak lagi dibuka untuk umum.
+- Masa berlaku: invoice, resume, resep 90 hari; surat sakit tanpa batas. Tombol "Cabut tautan" ada di jendela WhatsApp (Admin/Superadmin).
+- Satu tautan per invoice selalu menampilkan PDF terbaru (cap LUNAS setelah dibayar).
+- Sheet baru `TAUTAN` dibuat otomatis oleh backend.
+- Pasang: (1) Kode.gs → Simpan → Deploy → Kelola deployment → Edit → Versi baru. (2) Frontend: salin isi zip (js/config.js TIDAK ada di zip) lalu git add . / git commit -m "v2.9.4 tautan dokumen" / git push; Ctrl+Shift+R.
