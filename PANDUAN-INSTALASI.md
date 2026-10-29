@@ -330,3 +330,8 @@ Backend `Kode.gs` dan frontend sama-sama diperbarui. Data dan alur kerja tidak b
 - Satu tautan per invoice selalu menampilkan PDF terbaru (cap LUNAS setelah dibayar).
 - Sheet baru `TAUTAN` dibuat otomatis oleh backend.
 - Pasang: (1) Kode.gs → Simpan → Deploy → Kelola deployment → Edit → Versi baru. (2) Frontend: salin isi zip (js/config.js TIDAK ada di zip) lalu git add . / git commit -m "v2.9.4 tautan dokumen" / git push; Ctrl+Shift+R.
+
+## v2.9.5 — Pratinjau PDF di HP + Alamat aplikasi
+- Halaman tautan pasien di HP menampilkan PDF langsung (pdf.js dari jsDelivr). Bila gagal dimuat, tampil tombol Unduh/Buka seperti sebelumnya.
+- Pengaturan → "Alamat aplikasi untuk tautan pasien": isi `https://shancare-erm.vercel.app` agar semua tautan memakai alamat itu.
+- Pasang: Kode.gs (Deploy → Kelola deployment → Edit → Versi baru), lalu frontend: git add . / git commit -m "v2.9.5" / git push. config.js tidak ada di zip.

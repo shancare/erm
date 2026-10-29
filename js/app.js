@@ -98,17 +98,18 @@ const uuid = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 
 const tunda = ms => new Promise(r => setTimeout(r, ms));
 let CACHE_V = 0;                      // naik setiap cache dibuang \u2192 hasil refresh latar yang lahir sebelum penulisan tidak boleh masuk cache
 function bersihkanCache() { CACHE_V++; Object.keys(MEMC).forEach(k => delete MEMC[k]); }
-const APP_VER = '2.9.4';
+const APP_VER = '2.9.5';
 /** Pemanasan: bangunkan Apps Script selagi pengguna mengetik/membaca, supaya panggilan nyata tidak menanggung cold start. */
 function pemanasan() { if (!GAS_URL || /GANTI/.test(GAS_URL)) return; try { fetch(GAS_URL + (GAS_URL.indexOf('?') < 0 ? '?' : '&') + 'ping=' + Date.now(), { mode: 'no-cors', cache: 'no-store' }).catch(() => {}); } catch (e) { /* abaikan */ } }
 /** Pengukur performa: di console ketik Perf.table() — 'net' besar & 'server' kecil = jaringan/cold start; 'server' besar = Sheets/tulis. */
 const Perf = { rows: [], add(aksi, total, server, bytes) { this.rows.push({ aksi, total, server: server == null ? null : server, net: server == null ? null : total - server, kb: bytes == null ? null : Math.round(bytes / 102.4) / 10 }); if (this.rows.length > 200) this.rows.shift(); }, table() { console.table(this.rows.slice(-30)); } };
 window.Perf = Perf;
 /** Pustaka berat dimuat HANYA saat dibutuhkan (Chart.js untuk grafik, SheetJS untuk ekspor Excel). */
-const LIB_URL = { chart: 'https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js', xlsx: 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js' };
+const LIB_URL = { chart: 'https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js', xlsx: 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js', pdfjs: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js' };
+const PDFJS_WORKER = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
 const LIB_P = {};
 function muatLib(n) {
-  if ((n === 'chart' && typeof Chart !== 'undefined') || (n === 'xlsx' && typeof XLSX !== 'undefined')) return Promise.resolve();
+  if ((n === 'chart' && typeof Chart !== 'undefined') || (n === 'xlsx' && typeof XLSX !== 'undefined') || (n === 'pdfjs' && window.pdfjsLib)) return Promise.resolve();
   if (LIB_P[n]) return LIB_P[n];
   return (LIB_P[n] = new Promise((res, rej) => {
     const s = document.createElement('script'); s.src = LIB_URL[n]; s.async = true;
@@ -1432,7 +1433,8 @@ async function bagikanWa(jenis, id, pasien, extra, tplOverride) {
   MD.open('mdl2', { title: 'Kirim via WhatsApp', body: skel(2, 60) });
   try {
     const r = await call('dokumen.bagikan', { jenis: jenis, id: id });
-    r.url = location.origin + location.pathname.replace(/index\.html$/, '') + '?d=' + r.kode;
+    const dasar = String(S.cfg.app_url || '').trim().replace(/\/+$/, '') || (location.origin + location.pathname.replace(/index\.html$/, '').replace(/\/+$/, ''));
+    r.url = dasar + '/?d=' + r.kode;
     const tpl = tplOverride || (jenis === 'invoice' ? S.cfg.wa_template_invoice : (jenis === 'surat' ? 'Halo {nama}, berikut surat keterangan sakit dari {klinik}. Unduh PDF-nya di sini: {link}\nSemoga lekas pulih.' : jenis === 'resep' || jenis === 'resepk' ? 'Halo {nama}, berikut resep obat dari {klinik}. Unduh PDF-nya di sini: {link}\nGunakan sesuai anjuran dokter. Terima kasih.' : S.cfg.wa_template_resume));
     const teks = isiTemplate(tpl, Object.assign({ nama: pasien.nama, klinik: S.cfg.nama_klinik, link: r.url }, extra));
     const href = () => waUrl(pasien.no_wa, $('#waMsg').value);
@@ -1565,7 +1567,7 @@ function tabKlinik(el) {
   put(el, html`<div class="nx-grid2"><div class="nx-card"><div class="nx-sec-title mb16"><i class="bi bi-hospital"></i> Identitas Klinik</div>${medan('cNama', 'Nama klinik', { v: c.nama_klinik, req: 1 })}${medan('cAl', 'Alamat', { v: c.alamat, ta: 1, h: 64 })}<div class="nx-grid2" style="gap:0 16px">${medan('cTel', 'Telepon', { v: c.telepon, type: 'tel' })}${medan('cEm', 'Email', { v: c.email, type: 'email' })}</div>
     <div class="nx-field"><label class="nx-lab">Logo (tampil di aplikasi & kop PDF)</label><div class="row-gap"><img id="logoPrev" src="${c.logo || LOGO_FULL}" alt="Logo" style="height:48px;border-radius:8px;background:#fff;padding:2px"><label class="nx-btn secondary sm" style="margin:0"><i class="bi bi-upload"></i> Unggah<input type="file" accept="image/png,image/jpeg" data-ch="c.logo" class="hide"></label>${c.logo ? html`<button class="nx-btn ghost sm" data-act="c.logoHapus">Pakai bawaan</button>` : ''}</div><div class="nx-help">PNG/JPG, diperkecil otomatis.</div></div></div>
   <div class="nx-card"><div class="nx-sec-title mb16"><i class="bi bi-receipt"></i> Invoice & Jadwal</div><div class="nx-grid2" style="gap:0 16px">${medan('cPre', 'Prefix invoice', { v: c.prefix_invoice, max: 8 })}${medan('cJt', 'Jatuh tempo (hari)', { v: c.jatuh_tempo_hari, inputmode: 'numeric' })}</div>${medan('cBuf', 'Jeda transit antar kunjungan (menit)', { v: c.buffer_transit_menit, inputmode: 'numeric', help: 'Dipakai untuk mendeteksi bentrok jadwal petugas.' })}${medan('cPj', 'Persen jual BHP bawaan (%)', { v: c.persen_jual_bhp, inputmode: 'decimal', help: 'Harga jual BHP = harga beli + persen ini, dibulatkan ke Rp 500. Dapat diganti per BHP.' })}${medan('cRek', 'Informasi pembayaran (rekening / QRIS)', { v: c.rekening, ta: 1, h: 72, help: 'Tercetak pada invoice.' })}</div></div>
-  <div class="nx-card mt16"><div class="nx-sec-title mb16"><i class="bi bi-chat-dots"></i> Konsultasi Online</div>${medan('cKu', 'Alamat halaman konsultasi (Blogger)', { v: c.konsultasi_url, ph: 'https://klinikanda.blogspot.com/p/k.html', help: 'Tautan pasien = alamat ini + ?k=KODE. Gunakan alamat halaman pendek agar tautan singkat. Kosongkan untuk memakai alamat Apps Script.' })}${medan('cKj', 'Masa berlaku tautan (jam)', { v: c.konsultasi_jam, inputmode: 'numeric', help: 'Tautan juga langsung kedaluwarsa saat dokter menyelesaikan percakapan.' })}${medan('cWk', 'Templat pesan WhatsApp konsultasi', { v: c.wa_template_konsultasi, ta: 1, h: 90, help: 'Variabel: {nama} {dokter} {link} {berlaku} {klinik}' })}</div>
+  <div class="nx-card mt16"><div class="nx-sec-title mb16"><i class="bi bi-chat-dots"></i> Konsultasi Online</div>${medan('cApp', 'Alamat aplikasi untuk tautan pasien', { v: c.app_url, ph: 'https://shancare-erm.vercel.app', help: 'Tautan invoice/resume yang dikirim ke pasien memakai alamat ini. Kosongkan untuk memakai alamat tempat Anda membuka aplikasi.' })}${medan('cKu', 'Alamat halaman konsultasi (Blogger)', { v: c.konsultasi_url, ph: 'https://klinikanda.blogspot.com/p/k.html', help: 'Tautan pasien = alamat ini + ?k=KODE. Gunakan alamat halaman pendek agar tautan singkat. Kosongkan untuk memakai alamat Apps Script.' })}${medan('cKj', 'Masa berlaku tautan (jam)', { v: c.konsultasi_jam, inputmode: 'numeric', help: 'Tautan juga langsung kedaluwarsa saat dokter menyelesaikan percakapan.' })}${medan('cWk', 'Templat pesan WhatsApp konsultasi', { v: c.wa_template_konsultasi, ta: 1, h: 90, help: 'Variabel: {nama} {dokter} {link} {berlaku} {klinik}' })}</div>
   <div class="nx-card mt16"><div class="nx-sec-title mb16"><i class="bi bi-whatsapp"></i> Templat Pesan WhatsApp</div>${medan('cWi', 'Templat invoice \u2014 belum dibayar', { v: (c.wa_template_invoice || '').trim() === WA_INV_LAMA.trim() ? '' : c.wa_template_invoice, ta: 1, h: 96, ph: WA_INV_BELUM, help: 'Kosongkan untuk memakai bawaan. Variabel: {nama} {no} {total} {rekening} {klinik} {link} {jatuh_tempo}' })}${medan('cWs', 'Templat invoice \u2014 dibayar sebagian', { v: c.wa_template_invoice_sebagian, ta: 1, h: 96, ph: WA_INV_SEBAGIAN, help: 'Kosongkan untuk memakai bawaan. Tambahan: {dibayar} {sisa}' })}${medan('cWl', 'Templat invoice \u2014 lunas', { v: c.wa_template_invoice_lunas, ta: 1, h: 72, ph: WA_INV_LUNAS, help: 'Kosongkan untuk memakai bawaan. Dikirim saat invoice sudah lunas.' })}${medan('cWr', 'Templat resume medis', { v: c.wa_template_resume, ta: 1, h: 72, help: 'Variabel: {nama} {tanggal} {klinik} {link}' })}</div>
   <div class="mt16"><button class="nx-btn primary" data-act="c.simpan"><i class="bi bi-check2"></i> Simpan Pengaturan</button></div>`);
 }
@@ -1578,7 +1580,7 @@ INP['c.logo'] = el => {
 };
 ACT['c.logoHapus'] = async () => { try { const r = await call('config.simpan', { hapus_logo: true }); M.d.config = r; S.cfg = r; gambarShell(); render(true); toast('Logo bawaan dipakai.'); } catch (e) { galat(e); } };
 ACT['c.simpan'] = async btn => {
-  bersihGalat($('#mTab')); const d = { nama_klinik: val('cNama'), alamat: val('cAl'), telepon: val('cTel'), email: val('cEm'), prefix_invoice: val('cPre'), jatuh_tempo_hari: val('cJt'), buffer_transit_menit: val('cBuf'), persen_jual_bhp: val('cPj'), rekening: val('cRek'), wa_template_invoice: val('cWi'), wa_template_invoice_sebagian: val('cWs'), wa_template_invoice_lunas: val('cWl'), wa_template_resume: val('cWr'), konsultasi_url: val('cKu'), konsultasi_jam: val('cKj'), wa_template_konsultasi: val('cWk') };
+  bersihGalat($('#mTab')); const d = { nama_klinik: val('cNama'), alamat: val('cAl'), telepon: val('cTel'), email: val('cEm'), prefix_invoice: val('cPre'), jatuh_tempo_hari: val('cJt'), buffer_transit_menit: val('cBuf'), persen_jual_bhp: val('cPj'), rekening: val('cRek'), wa_template_invoice: val('cWi'), wa_template_invoice_sebagian: val('cWs'), wa_template_invoice_lunas: val('cWl'), wa_template_resume: val('cWr'), konsultasi_url: val('cKu'), app_url: val('cApp'), konsultasi_jam: val('cKj'), wa_template_konsultasi: val('cWk') };
   if (d.nama_klinik.length < 3) return bad('cNama', 'Nama klinik wajib diisi.'); if (d.persen_jual_bhp === '' || !(num(d.persen_jual_bhp) >= 0 && num(d.persen_jual_bhp) <= 1000)) return bad('cPj', 'Isi persen 0\u20131000.'); if (!/^[A-Za-z0-9]{2,8}$/.test(d.prefix_invoice)) return bad('cPre', '2\u20138 huruf/angka.');
   if (d.konsultasi_url && !/^https:\/\/[^\s?#]+$/.test(d.konsultasi_url)) return bad('cKu', 'Harus diawali https:// dan tanpa ? atau #.');
   if (M.logo) d.logo_data = M.logo;
@@ -1784,6 +1786,27 @@ function buatChat(root, o) {
 }
 
 // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 Halaman dokumen untuk pasien (tanpa login): ?d=KODE \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+/** Pratinjau PDF di HP: tiap halaman digambar ke canvas dengan pdf.js (dimuat hanya di halaman ini). */
+async function pratinjauPdfHp(b64) {
+  await muatLib('pdfjs');
+  if (!window.pdfjsLib) throw new Error('pdf.js tidak tersedia');
+  if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+    const kode = await (await fetch(PDFJS_WORKER)).text();       // worker harus satu-asal: dimuat lewat blob
+    pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(new Blob([kode], { type: 'text/javascript' }));
+  }
+  const bin = atob(b64), bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
+  const el = $('#pvHal'); if (!el) return;
+  el.innerHTML = '';
+  const lebar = Math.max(280, el.clientWidth - 16), dpr = Math.min(window.devicePixelRatio || 1, 2);
+  for (let n = 1; n <= Math.min(pdf.numPages, 12); n++) {
+    const page = await pdf.getPage(n), v0 = page.getViewport({ scale: 1 }), sk = (lebar / v0.width) * dpr, vp = page.getViewport({ scale: sk });
+    const cv = document.createElement('canvas'); cv.width = Math.floor(vp.width); cv.height = Math.floor(vp.height);
+    cv.style.cssText = 'width:100%;height:auto;display:block;margin:0 auto 10px;background:#fff;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,.15)';
+    el.appendChild(cv);
+    await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+  }
+}
 function halamanDokumen(kode) {
   document.body.classList.add('pasien-mode');
   $('#boot').classList.add('hide'); $('#appView').classList.add('hide');
@@ -1795,10 +1818,12 @@ function halamanDokumen(kode) {
     const nama = d.klinik && d.klinik.nama;
     const warna = d.status === 'LUNAS' ? 'ok' : (d.status ? 'warn' : '');
     const aksi = html`<div class="wrap-gap" style="padding:12px 16px;border-top:1px solid var(--line)"><a class="nx-btn primary" href="${url}" download="${d.nama_file}"><i class="bi bi-download"></i> Unduh PDF</a>${MOBILE_UA ? html`<a class="nx-btn secondary" href="${url}" target="_blank" rel="noopener"><i class="bi bi-box-arrow-up-right"></i> Buka PDF</a>` : ''}</div>`;
+    const kartu = html`<div class="nx-empty" style="padding:32px 16px"><div class="ill"><i class="bi bi-file-earmark-pdf"></i></div><b>${d.judul}</b>${d.status ? html`<div class="mt8"><span class="nx-badge ${warna}">${d.status}</span></div>` : ''}<div class="muted mt8">${d.nama_file}</div></div>`;
     const isi = MOBILE_UA
-      ? html`<div class="nx-empty" style="padding:32px 16px"><div class="ill"><i class="bi bi-file-earmark-pdf"></i></div><b>${d.judul}</b>${d.status ? html`<div class="mt8"><span class="nx-badge ${warna}">${d.status}</span></div>` : ''}<div class="muted mt8">${d.nama_file}</div></div>`
+      ? html`<div style="padding:12px 16px 0" class="row-between"><b>${d.judul}</b>${d.status ? html`<span class="nx-badge ${warna}">${d.status}</span>` : ''}</div><div id="pvHal" style="padding:12px 8px">${skel(1, 360)}</div>`
       : html`<div style="padding:12px 16px 0" class="row-between"><b>${d.judul}</b>${d.status ? html`<span class="nx-badge ${warna}">${d.status}</span>` : ''}</div><iframe class="nx-doc-frame" title="Dokumen" src="${url}" style="height:62vh;margin:12px 0 0"></iframe>`;
     put(v, html`<div class="kc-page"><div class="kc-shell">${kop(nama, d.klinik && d.klinik.logo)}<div class="kc-body" style="flex:1;overflow:auto">${isi}</div>${aksi}</div></div>`);
+    if (MOBILE_UA) pratinjauPdfHp(d.base64).catch(() => { const el = $('#pvHal'); if (el) put(el, kartu); });   // gagal (CDN/peramban lama): tetap ada tombol Unduh/Buka
   }).catch(e => {
     put(v, html`<div class="kc-page"><div class="kc-shell">${kop()}<div class="kc-body" style="padding:16px"><div class="nx-alert err" role="alert"><i class="bi bi-exclamation-octagon-fill"></i><div>${e.message || 'Tautan tidak dapat dibuka.'}</div></div></div></div></div>`);
   });
